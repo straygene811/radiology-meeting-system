@@ -4850,7 +4850,7 @@ export default function AdminDashboardPage() {
               rows={8}
               value={bulkCsvText}
               onChange={(e) => setBulkCsvText(e.target.value)}
-              placeholder={`範例：\nR18, 王小明, 醫事放射師, 一般攝影組、CT電腦斷層組, 在職\nR19, 陳小華, 護理師, 科務行政組, 在職`}
+              placeholder={`範例：\nR18, 王小明, 醫事放射師, 一般科會、品保會議, 在職\nR19, 陳小華, 護理師, 主管/行政, 在職`}
             />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button type="button" onClick={() => setShowBulkModal(false)} className="btn btn-secondary">
