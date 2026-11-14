@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "datasetReference": {
+    "byPath": {
+      "path": "../新樓影像醫學科_會議分析報表.SemanticModel"
+    },
+    "byConnection": null
+  }
+}

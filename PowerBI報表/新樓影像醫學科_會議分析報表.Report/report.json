@@ -1,0 +1,105 @@
+{
+  "id": 0,
+  "theme": "AccessibleCityPark",
+  "resourcePackages": [
+    {
+      "resourcePackage": {
+        "name": "SharedResources",
+        "type": 2,
+        "items": [
+          {
+            "type": 202,
+            "path": "BaseThemes/CY26SU04.json",
+            "name": "CY26SU04"
+          },
+          {
+            "type": 201,
+            "path": "BuiltInThemes/AccessibleCityPark.json",
+            "name": "AccessibleCityPark"
+          }
+        ],
+        "disabled": false
+      }
+    }
+  ],
+  "sections": [
+    {
+      "id": 0,
+      "name": "ReportSection01",
+      "displayName": "影像醫學科會議互動總覽",
+      "filters": "[]",
+      "ordinal": 0,
+      "visualContainers": [
+        {
+          "x": 16,
+          "y": 12,
+          "z": 0,
+          "width": 620,
+          "height": 58,
+          "config": "{\"name\":\"vis_title_01\",\"layouts\":[{\"id\":0,\"position\":{\"x\":16,\"y\":12,\"z\":0,\"width\":620,\"height\":58,\"tabOrder\":0}}],\"singleVisual\":{\"visualType\":\"textbox\",\"drillFilterOtherVisuals\":true,\"objects\":{\"general\":[{\"properties\":{\"paragraphs\":[{\"textRuns\":[{\"value\":\"新樓醫院影像醫學科 — 會議出席與簽核互動分析\",\"textStyle\":{\"fontSize\":\"20pt\",\"fontWeight\":\"bold\"}}],\"horizontalTextAlignment\":\"left\"}]}}]}}}",
+          "filters": "[]"
+        },
+        {
+          "x": 650,
+          "y": 12,
+          "z": 1000,
+          "width": 610,
+          "height": 110,
+          "config": "{\"name\":\"vis_kpi_cards_02\",\"layouts\":[{\"id\":0,\"position\":{\"x\":650,\"y\":12,\"z\":1000,\"width\":610,\"height\":110,\"tabOrder\":1000}}],\"singleVisual\":{\"visualType\":\"cardVisual\",\"projections\":{\"Data\":[{\"queryRef\":\"CountNonNull(1_會議總表.會議ID)\"},{\"queryRef\":\"Avg(1_會議總表.出席率百分比)\"},{\"queryRef\":\"Avg(1_會議總表.簽核率百分比)\"},{\"queryRef\":\"Sum(1_會議總表.未簽核人數)\"}]},\"prototypeQuery\":{\"Version\":2,\"From\":[{\"Name\":\"m\",\"Entity\":\"1_會議總表\",\"Type\":0}],\"Select\":[{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"會議ID\"}},\"Function\":5},\"Name\":\"CountNonNull(1_會議總表.會議ID)\",\"NativeReferenceName\":\"會議總場次\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"出席率百分比\"}},\"Function\":1},\"Name\":\"Avg(1_會議總表.出席率百分比)\",\"NativeReferenceName\":\"平均出席率(%)\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"簽核率百分比\"}},\"Function\":1},\"Name\":\"Avg(1_會議總表.簽核率百分比)\",\"NativeReferenceName\":\"平均簽核率(%)\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"未簽核人數\"}},\"Function\":0},\"Name\":\"Sum(1_會議總表.未簽核人數)\",\"NativeReferenceName\":\"待簽核總人次\"}]},\"drillFilterOtherVisuals\":true}}",
+          "filters": "[]"
+        },
+        {
+          "x": 16,
+          "y": 78,
+          "z": 2000,
+          "width": 190,
+          "height": 165,
+          "config": "{\"name\":\"vis_slicer_year_03\",\"layouts\":[{\"id\":0,\"position\":{\"x\":16,\"y\":78,\"z\":2000,\"width\":190,\"height\":165,\"tabOrder\":2000}}],\"singleVisual\":{\"visualType\":\"slicer\",\"projections\":{\"Values\":[{\"queryRef\":\"1_會議總表.民國年度\",\"active\":true}]},\"prototypeQuery\":{\"Version\":2,\"From\":[{\"Name\":\"m\",\"Entity\":\"1_會議總表\",\"Type\":0}],\"Select\":[{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"民國年度\"},\"Name\":\"1_會議總表.民國年度\",\"NativeReferenceName\":\"民國年度\"}]},\"drillFilterOtherVisuals\":true,\"objects\":{\"data\":[{\"properties\":{\"mode\":{\"expr\":{\"Literal\":{\"Value\":\"'Basic'\"}}}}}]}}}",
+          "filters": "[]"
+        },
+        {
+          "x": 218,
+          "y": 78,
+          "z": 3000,
+          "width": 220,
+          "height": 165,
+          "config": "{\"name\":\"vis_slicer_cat_04\",\"layouts\":[{\"id\":0,\"position\":{\"x\":218,\"y\":78,\"z\":3000,\"width\":220,\"height\":165,\"tabOrder\":3000}}],\"singleVisual\":{\"visualType\":\"slicer\",\"projections\":{\"Values\":[{\"queryRef\":\"1_會議總表.會議分類名稱\",\"active\":true}]},\"prototypeQuery\":{\"Version\":2,\"From\":[{\"Name\":\"m\",\"Entity\":\"1_會議總表\",\"Type\":0}],\"Select\":[{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"會議分類名稱\"},\"Name\":\"1_會議總表.會議分類名稱\",\"NativeReferenceName\":\"會議分類名稱\"}]},\"drillFilterOtherVisuals\":true,\"objects\":{\"data\":[{\"properties\":{\"mode\":{\"expr\":{\"Literal\":{\"Value\":\"'Basic'\"}}}}}]}}}",
+          "filters": "[]"
+        },
+        {
+          "x": 16,
+          "y": 255,
+          "z": 4000,
+          "width": 422,
+          "height": 445,
+          "config": "{\"name\":\"vis_pie_cat_05\",\"layouts\":[{\"id\":0,\"position\":{\"x\":16,\"y\":255,\"z\":4000,\"width\":422,\"height\":445,\"tabOrder\":4000}}],\"singleVisual\":{\"visualType\":\"pieChart\",\"projections\":{\"Category\":[{\"queryRef\":\"1_會議總表.會議分類名稱\",\"active\":true}],\"Y\":[{\"queryRef\":\"CountNonNull(1_會議總表.會議ID)\"}]},\"prototypeQuery\":{\"Version\":2,\"From\":[{\"Name\":\"m\",\"Entity\":\"1_會議總表\",\"Type\":0}],\"Select\":[{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"會議分類名稱\"},\"Name\":\"1_會議總表.會議分類名稱\",\"NativeReferenceName\":\"會議分類名稱\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"會議ID\"}},\"Function\":5},\"Name\":\"CountNonNull(1_會議總表.會議ID)\",\"NativeReferenceName\":\"會議場次\"}]},\"drillFilterOtherVisuals\":true}}",
+          "filters": "[]"
+        },
+        {
+          "x": 452,
+          "y": 135,
+          "z": 5000,
+          "width": 808,
+          "height": 275,
+          "config": "{\"name\":\"vis_combo_meetings_06\",\"layouts\":[{\"id\":0,\"position\":{\"x\":452,\"y\":135,\"z\":5000,\"width\":808,\"height\":275,\"tabOrder\":5000}}],\"singleVisual\":{\"visualType\":\"lineStackedColumnComboChart\",\"projections\":{\"Category\":[{\"queryRef\":\"1_會議總表.開會日期\",\"active\":true}],\"Y\":[{\"queryRef\":\"Sum(1_會議總表.出席人數)\"},{\"queryRef\":\"Sum(1_會議總表.已簽核人數)\"}],\"Y2\":[{\"queryRef\":\"Avg(1_會議總表.簽核率百分比)\"}]},\"prototypeQuery\":{\"Version\":2,\"From\":[{\"Name\":\"m\",\"Entity\":\"1_會議總表\",\"Type\":0}],\"Select\":[{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"開會日期\"},\"Name\":\"1_會議總表.開會日期\",\"NativeReferenceName\":\"開會日期\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"出席人數\"}},\"Function\":0},\"Name\":\"Sum(1_會議總表.出席人數)\",\"NativeReferenceName\":\"出席人數\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"已簽核人數\"}},\"Function\":0},\"Name\":\"Sum(1_會議總表.已簽核人數)\",\"NativeReferenceName\":\"已簽核人數\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"m\"}},\"Property\":\"簽核率百分比\"}},\"Function\":1},\"Name\":\"Avg(1_會議總表.簽核率百分比)\",\"NativeReferenceName\":\"簽核率(%)\"}]},\"drillFilterOtherVisuals\":true}}",
+          "filters": "[]"
+        },
+        {
+          "x": 452,
+          "y": 422,
+          "z": 6000,
+          "width": 808,
+          "height": 278,
+          "config": "{\"name\":\"vis_bar_staff_07\",\"layouts\":[{\"id\":0,\"position\":{\"x\":452,\"y\":422,\"z\":6000,\"width\":808,\"height\":278,\"tabOrder\":6000}}],\"singleVisual\":{\"visualType\":\"clusteredBarChart\",\"projections\":{\"Category\":[{\"queryRef\":\"3_全科人員統計表.姓名\",\"active\":true}],\"Y\":[{\"queryRef\":\"Sum(3_全科人員統計表.已簽核場次)\"},{\"queryRef\":\"Sum(3_全科人員統計表.未簽核場次)\"},{\"queryRef\":\"Sum(3_全科人員統計表.實際出席場次)\"}]},\"prototypeQuery\":{\"Version\":2,\"From\":[{\"Name\":\"s\",\"Entity\":\"3_全科人員統計表\",\"Type\":0}],\"Select\":[{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"s\"}},\"Property\":\"姓名\"},\"Name\":\"3_全科人員統計表.姓名\",\"NativeReferenceName\":\"同仁姓名\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"s\"}},\"Property\":\"已簽核場次\"}},\"Function\":0},\"Name\":\"Sum(3_全科人員統計表.已簽核場次)\",\"NativeReferenceName\":\"已簽核場次\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"s\"}},\"Property\":\"未簽核場次\"}},\"Function\":0},\"Name\":\"Sum(3_全科人員統計表.未簽核場次)\",\"NativeReferenceName\":\"未簽核場次\"},{\"Aggregation\":{\"Expression\":{\"Column\":{\"Expression\":{\"SourceRef\":{\"Source\":\"s\"}},\"Property\":\"實際出席場次\"}},\"Function\":0},\"Name\":\"Sum(3_全科人員統計表.實際出席場次)\",\"NativeReferenceName\":\"實際出席場次\"}]},\"drillFilterOtherVisuals\":true}}",
+          "filters": "[]"
+        }
+      ],
+      "config": "{}",
+      "displayOption": 1,
+      "width": 1280,
+      "height": 720
+    }
+  ],
+  "config": "{\"version\":\"5.72\",\"themeCollection\":{\"baseTheme\":{\"name\":\"CY26SU04\",\"type\":2,\"version\":{\"visual\":\"2.8.0\",\"report\":\"3.2.0\",\"page\":\"2.3.1\"}},\"customTheme\":{\"name\":\"AccessibleCityPark\",\"type\":2,\"version\":{\"visual\":\"2.8.0\",\"report\":\"3.2.0\",\"page\":\"2.3.1\"}}},\"activeSectionIndex\":0,\"defaultDrillFilterOtherVisuals\":true,\"linguisticSchemaSyncVersion\":0,\"settings\":{\"useNewFilterPaneExperience\":true,\"allowChangeFilterTypes\":true,\"useStylableVisualContainerHeader\":true,\"queryLimitOption\":6,\"useEnhancedTooltips\":true,\"exportDataMode\":1,\"useDefaultAggregateDisplayName\":true}}",
+  "layoutOptimization": 0
+}

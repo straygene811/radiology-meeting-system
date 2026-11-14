@@ -1,0 +1,21 @@
+{
+  "name": "radiology-meeting-system",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@vercel/kv": "^3.0.0",
+    "docx": "^9.5.1",
+    "iconv-lite": "^0.7.3",
+    "lucide-react": "^1.16.0",
+    "next": "16.2.1",
+    "qrcode": "^1.5.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  }
+}

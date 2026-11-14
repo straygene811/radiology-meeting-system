@@ -1,0 +1,429 @@
+{
+  "name": "SemanticModel",
+  "compatibilityLevel": 1550,
+  "model": {
+    "culture": "zh-TW",
+    "dataAccessOptions": {
+      "legacyRedirects": true,
+      "returnErrorValuesAsNull": true
+    },
+    "defaultPowerBIDataSourceVersion": "powerBI_V3",
+    "sourceQueryCulture": "zh-TW",
+    "tables": [
+      {
+        "name": "1_會議總表",
+        "columns": [
+          {
+            "name": "會議ID",
+            "dataType": "string",
+            "sourceColumn": "會議ID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "會議標題",
+            "dataType": "string",
+            "sourceColumn": "會議標題",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "會議分類代碼",
+            "dataType": "string",
+            "sourceColumn": "會議分類代碼",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "會議分類名稱",
+            "dataType": "string",
+            "sourceColumn": "會議分類名稱",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "民國年度",
+            "dataType": "string",
+            "sourceColumn": "民國年度",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "開會日期",
+            "dataType": "string",
+            "sourceColumn": "開會日期",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "開會時間",
+            "dataType": "string",
+            "sourceColumn": "開會時間",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "開會地點",
+            "dataType": "string",
+            "sourceColumn": "開會地點",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "會議主席",
+            "dataType": "string",
+            "sourceColumn": "會議主席",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "會議記錄人",
+            "dataType": "string",
+            "sourceColumn": "會議記錄人",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "專區狀態",
+            "dataType": "string",
+            "sourceColumn": "專區狀態",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "應到人數",
+            "dataType": "int64",
+            "sourceColumn": "應到人數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "出席人數",
+            "dataType": "int64",
+            "sourceColumn": "出席人數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "值班休假人數",
+            "dataType": "int64",
+            "sourceColumn": "值班休假人數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "出席率百分比",
+            "dataType": "int64",
+            "sourceColumn": "出席率百分比",
+            "summarizeBy": "average"
+          },
+          {
+            "name": "已簽核人數",
+            "dataType": "int64",
+            "sourceColumn": "已簽核人數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "未簽核人數",
+            "dataType": "int64",
+            "sourceColumn": "未簽核人數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "簽核率百分比",
+            "dataType": "int64",
+            "sourceColumn": "簽核率百分比",
+            "summarizeBy": "average"
+          },
+          {
+            "name": "議程數",
+            "dataType": "int64",
+            "sourceColumn": "議程數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "決議數",
+            "dataType": "int64",
+            "sourceColumn": "決議數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "待辦事項數",
+            "dataType": "int64",
+            "sourceColumn": "待辦事項數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "附件檔案數",
+            "dataType": "int64",
+            "sourceColumn": "附件檔案數",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "出席人員名單",
+            "dataType": "string",
+            "sourceColumn": "出席人員名單",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "值班休假名單",
+            "dataType": "string",
+            "sourceColumn": "值班休假名單",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "1_會議總表",
+            "mode": "import",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    來源 = Csv.Document(Web.Contents(\"http://localhost:3000/api/powerbi?table=meetings&format=csv\"),[Delimiter=\",\", Encoding=950, QuoteStyle=QuoteStyle.Csv]),",
+                "    提升的標頭 = Table.PromoteHeaders(來源, [PromoteAllScalars=true]),",
+                "    變更的類型 = Table.TransformColumnTypes(提升的標頭,{{\"應到人數\", Int64.Type}, {\"出席人數\", Int64.Type}, {\"值班休假人數\", Int64.Type}, {\"出席率百分比\", Int64.Type}, {\"已簽核人數\", Int64.Type}, {\"未簽核人數\", Int64.Type}, {\"簽核率百分比\", Int64.Type}})",
+                "in",
+                "    變更的類型"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "2_出席與簽核明細表",
+        "columns": [
+          {
+            "name": "會議ID",
+            "dataType": "string",
+            "sourceColumn": "會議ID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "會議標題",
+            "dataType": "string",
+            "sourceColumn": "會議標題",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "會議分類",
+            "dataType": "string",
+            "sourceColumn": "會議分類",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "民國年度",
+            "dataType": "string",
+            "sourceColumn": "民國年度",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "開會日期",
+            "dataType": "string",
+            "sourceColumn": "開會日期",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "專區狀態",
+            "dataType": "string",
+            "sourceColumn": "專區狀態",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "人員代號",
+            "dataType": "string",
+            "sourceColumn": "人員代號",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "人員姓名",
+            "dataType": "string",
+            "sourceColumn": "人員姓名",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "職稱",
+            "dataType": "string",
+            "sourceColumn": "職稱",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "所屬組別",
+            "dataType": "string",
+            "sourceColumn": "所屬組別",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "出勤狀態",
+            "dataType": "string",
+            "sourceColumn": "出勤狀態",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "是否出席數值",
+            "dataType": "int64",
+            "sourceColumn": "是否出席數值",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "是否值班休假數值",
+            "dataType": "int64",
+            "sourceColumn": "是否值班休假數值",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "簽核狀態",
+            "dataType": "string",
+            "sourceColumn": "簽核狀態",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "是否已簽核數值",
+            "dataType": "int64",
+            "sourceColumn": "是否已簽核數值",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "簽核方式",
+            "dataType": "string",
+            "sourceColumn": "簽核方式",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "簽核時間",
+            "dataType": "string",
+            "sourceColumn": "簽核時間",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "簽核意見",
+            "dataType": "string",
+            "sourceColumn": "簽核意見",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "2_出席與簽核明細表",
+            "mode": "import",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    來源 = Csv.Document(Web.Contents(\"http://localhost:3000/api/powerbi?table=attendance&format=csv\"),[Delimiter=\",\", Encoding=950, QuoteStyle=QuoteStyle.Csv]),",
+                "    提升的標頭 = Table.PromoteHeaders(來源, [PromoteAllScalars=true]),",
+                "    變更的類型 = Table.TransformColumnTypes(提升的標頭,{{\"是否出席數值\", Int64.Type}, {\"是否值班休假數值\", Int64.Type}, {\"是否已簽核數值\", Int64.Type}})",
+                "in",
+                "    變更的類型"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "3_全科人員統計表",
+        "columns": [
+          {
+            "name": "人員ID",
+            "dataType": "string",
+            "sourceColumn": "人員ID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "登入代號",
+            "dataType": "string",
+            "sourceColumn": "登入代號",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "姓名",
+            "dataType": "string",
+            "sourceColumn": "姓名",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "職稱",
+            "dataType": "string",
+            "sourceColumn": "職稱",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "在職狀態",
+            "dataType": "string",
+            "sourceColumn": "在職狀態",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "所屬組別",
+            "dataType": "string",
+            "sourceColumn": "所屬組別",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "總會議場次",
+            "dataType": "int64",
+            "sourceColumn": "總會議場次",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "實際出席場次",
+            "dataType": "int64",
+            "sourceColumn": "實際出席場次",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "值班休假場次",
+            "dataType": "int64",
+            "sourceColumn": "值班休假場次",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "出席率百分比",
+            "dataType": "int64",
+            "sourceColumn": "出席率百分比",
+            "summarizeBy": "average"
+          },
+          {
+            "name": "已簽核場次",
+            "dataType": "int64",
+            "sourceColumn": "已簽核場次",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "未簽核場次",
+            "dataType": "int64",
+            "sourceColumn": "未簽核場次",
+            "summarizeBy": "sum"
+          },
+          {
+            "name": "簽核率百分比",
+            "dataType": "int64",
+            "sourceColumn": "簽核率百分比",
+            "summarizeBy": "average"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "3_全科人員統計表",
+            "mode": "import",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    來源 = Csv.Document(Web.Contents(\"http://localhost:3000/api/powerbi?table=staff&format=csv\"),[Delimiter=\",\", Encoding=950, QuoteStyle=QuoteStyle.Csv]),",
+                "    提升的標頭 = Table.PromoteHeaders(來源, [PromoteAllScalars=true]),",
+                "    變更的類型 = Table.TransformColumnTypes(提升的標頭,{{\"總會議場次\", Int64.Type}, {\"實際出席場次\", Int64.Type}, {\"值班休假場次\", Int64.Type}, {\"出席率百分比\", Int64.Type}, {\"已簽核場次\", Int64.Type}, {\"未簽核場次\", Int64.Type}, {\"簽核率百分比\", Int64.Type}})",
+                "in",
+                "    變更的類型"
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "name": "rel_meeting_attendance",
+        "fromTable": "2_出席與簽核明細表",
+        "fromColumn": "會議ID",
+        "toTable": "1_會議總表",
+        "toColumn": "會議ID",
+        "crossFilteringBehavior": "bothDirections"
+      },
+      {
+        "name": "rel_staff_attendance",
+        "fromTable": "2_出席與簽核明細表",
+        "fromColumn": "人員姓名",
+        "toTable": "3_全科人員統計表",
+        "toColumn": "姓名",
+        "crossFilteringBehavior": "bothDirections"
+      }
+    ]
+  }
+}

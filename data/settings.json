@@ -1,0 +1,70 @@
+{
+  "hospitalName": "新樓基督教醫院",
+  "departmentName": "影像醫學科",
+  "systemTitle": "新樓醫院 影像醫學科會議整合系統",
+  "geminiApiKey": "",
+  "googleSheetWebhookUrl": "",
+  "autoSyncGoogleSheet": false,
+  "lastSyncedAt": null,
+  "surveySystemUrl": "https://survey-app-six-lyart.vercel.app/",
+  "surveySystemTitle": "影像醫學科問卷調查系統",
+  "powerBiEmbedUrl": "",
+  "powerBiPushUrl": "",
+  "meetingCategories": [
+    {
+      "id": "dept",
+      "name": "科務會議 / 行政會議",
+      "shortName": "科務會議",
+      "color": "#2563eb",
+      "badgeBg": "#dbeafe",
+      "templateType": "dept"
+    },
+    {
+      "id": "ccc",
+      "name": "教學會議 / CCC（臨床能力委員會）會議",
+      "shortName": "教學暨CCC會議",
+      "color": "#7c3aed",
+      "badgeBg": "#ede9fe",
+      "templateType": "ccc"
+    },
+    {
+      "id": "qa",
+      "name": "品保會議（CT 暨乳房品保、MRI 品保等）",
+      "shortName": "品保會議",
+      "color": "#059669",
+      "badgeBg": "#d1fae5",
+      "templateType": "qa"
+    },
+    {
+      "id": "rad",
+      "name": "輻射防護（輻防）會議",
+      "shortName": "輻防會議",
+      "color": "#d97706",
+      "badgeBg": "#fef3c7",
+      "templateType": "rad"
+    },
+    {
+      "id": "safety",
+      "name": "病安案例討論 / 跨領域會議 / 學術晨會",
+      "shortName": "病安與跨領域會議",
+      "color": "#dc2626",
+      "badgeBg": "#fee2e2",
+      "templateType": "safety"
+    },
+    {
+      "id": "other",
+      "name": "其它會議（自訂專題／臨時／跨科會議）",
+      "shortName": "其它會議",
+      "color": "#0891b2",
+      "badgeBg": "#cffafe",
+      "templateType": "other"
+    }
+  ],
+  "availableGroups": [
+    "主管/行政",
+    "一般科會",
+    "教學/臨床教師",
+    "品保會議",
+    "跨領域會議"
+  ]
+}

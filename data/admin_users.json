@@ -1,0 +1,20 @@
+{
+  "manager": {
+    "username": "x7260",
+    "password": "x7260",
+    "name": "科主任 (x7260)",
+    "roleLabel": "主任 (最高檢視與最終簽核)"
+  },
+  "deputy": {
+    "username": "x3137a",
+    "password": "x3137a",
+    "name": "副組長 / 紀錄人 (x3137a)",
+    "roleLabel": "副組長 / 會議主席與紀錄人"
+  },
+  "maintainer": {
+    "username": "x3137",
+    "password": "straygene",
+    "name": "潘俊儒 (x3137)",
+    "roleLabel": "系統維護人員 (最高管理權限)"
+  }
+}
