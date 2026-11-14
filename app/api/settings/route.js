@@ -16,6 +16,7 @@ export async function GET() {
 
     return NextResponse.json({
       role,
+      storageMode: db.getStorageMode(),
       settings: settings || {},
       accounts: {
         manager: { username: users?.manager?.username || 'x7260', name: users?.manager?.name || '科主任' },
