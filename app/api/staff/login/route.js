@@ -27,20 +27,22 @@ export async function POST(request) {
     }
 
     // 紀錄登入次數與最後登入時間
-    const loginRecords = (await db.read('login_records.json')) || {};
-    const key = matched.name;
-    if (!loginRecords[key]) {
-      loginRecords[key] = {
-        code: matched.code,
-        name: matched.name,
-        count: 1,
-        last_login: new Date().toISOString()
-      };
-    } else {
-      loginRecords[key].count += 1;
-      loginRecords[key].last_login = new Date().toISOString();
-    }
-    await db.write('login_records.json', loginRecords);
+    try {
+      const loginRecords = (await db.read('login_records.json')) || {};
+      const key = matched.name;
+      if (!loginRecords[key]) {
+        loginRecords[key] = {
+          code: matched.code,
+          name: matched.name,
+          count: 1,
+          last_login: new Date().toISOString()
+        };
+      } else {
+        loginRecords[key].count += 1;
+        loginRecords[key].last_login = new Date().toISOString();
+      }
+      await db.write('login_records.json', loginRecords);
+    } catch {}
 
     return NextResponse.json({
       success: true,
