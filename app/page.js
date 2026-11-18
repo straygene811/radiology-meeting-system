@@ -121,6 +121,7 @@ export default function HomePage() {
   const [polishingVoice, setPolishingVoice] = useState(false);
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [aiStructuringLoading, setAiStructuringLoading] = useState(false);
+  const [frontendHandwrittenImages, setFrontendHandwrittenImages] = useState([]);
   const speechRecRef = useRef(null);
   const latestVoiceTextRef = useRef('');
 
@@ -667,10 +668,53 @@ export default function HomePage() {
     }
   };
 
+  const handleFrontendHandwrittenUpload = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxW = 1280;
+          let w = img.width;
+          let h = img.height;
+          if (w > maxW) {
+            h = Math.round((h * maxW) / w);
+            w = maxW;
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          const base64 = String(compressedDataUrl).split(',')[1] || '';
+          setFrontendHandwrittenImages((prev) => [
+            ...prev,
+            {
+              id: `FHW-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              name: file.name,
+              mimeType: 'image/jpeg',
+              base64,
+              dataUrl: compressedDataUrl
+            }
+          ]);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    showToast(`📷 已載入 ${files.length} 張手寫稿照片，可點選「2. 智慧修正與手寫潤飾」或「3. 一鍵轉成正式議程與決議」！`);
+    e.target.value = '';
+  };
+
   const handlePolishFrontendTranscript = async (textOverride = null, silentIfEmpty = false) => {
     const raw = (textOverride !== null ? textOverride : voiceQuickText || '').trim();
-    if (!raw) {
-      if (!silentIfEmpty) alert('請先進行語音辨識或輸入文字後再執行詞句修正！');
+    if (!raw && frontendHandwrittenImages.length === 0) {
+      if (!silentIfEmpty) alert('請先上傳手寫稿照片、進行語音辨識或輸入文字後再執行詞句修正潤飾！');
       return;
     }
     setPolishingVoice(true);
@@ -679,8 +723,13 @@ export default function HomePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'polish_transcript',
-          transcript: raw
+          action: frontendHandwrittenImages.length > 0 ? 'extract_handwritten' : 'polish_transcript',
+          transcript: raw,
+          handwrittenImages: frontendHandwrittenImages.map((img) => ({
+            base64: img.base64,
+            mimeType: img.mimeType,
+            name: img.name
+          }))
         })
       });
       const data = await res.json();
@@ -689,7 +738,9 @@ export default function HomePage() {
         setVoiceQuickText(data.correctedTranscript);
         latestVoiceTextRef.current = data.correctedTranscript;
         setVoiceCorrections(data.corrections || []);
-        showToast(data.message || '✨ 已自動完成同音錯別字校正與詞句潤飾！');
+        showToast(data.message || '✨ 已自動完成手寫稿/同音錯別字校正與詞句潤飾！');
+      } else if (!res.ok && data.error && !silentIfEmpty) {
+        alert(data.error);
       }
     } catch (err) {
       console.error('Polish transcript error:', err);
@@ -760,8 +811,8 @@ export default function HomePage() {
   };
 
   const handleRunFrontendAiStructuring = async () => {
-    if (!voiceQuickText.trim()) {
-      alert('請先點選「🎙️ 開始語音辨識」說話，或在文字框輸入幾句會議重點！');
+    if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0) {
+      alert('請先點選「🎙️ 開始語音辨識」說話、上傳手寫稿照片，或在文字框輸入幾句會議重點！');
       return;
     }
     if (!staffDraftMeeting) return;
@@ -773,7 +824,12 @@ export default function HomePage() {
         body: JSON.stringify({
           transcript: voiceQuickText,
           category: staffDraftMeeting.category || 'dept',
-          meetingTitle: staffDraftMeeting.title || ''
+          meetingTitle: staffDraftMeeting.title || '',
+          handwrittenImages: frontendHandwrittenImages.map((img) => ({
+            base64: img.base64,
+            mimeType: img.mimeType,
+            name: img.name
+          }))
         })
       });
       const data = await res.json();
@@ -781,6 +837,7 @@ export default function HomePage() {
         const r = data.result;
         if (data.correctedTranscript) {
           setVoiceQuickText(data.correctedTranscript);
+          latestVoiceTextRef.current = data.correctedTranscript;
         }
         if (data.corrections?.length) {
           setVoiceCorrections(data.corrections);
@@ -794,7 +851,7 @@ export default function HomePage() {
           actionItems: r.actionItems?.length ? r.actionItems : prev.actionItems,
           rawTranscript: data.correctedTranscript || voiceQuickText
         }));
-        showToast('✨ 已先自動校正同音錯別字，並轉換填入下方議程、討論與決議！');
+        showToast('✨ 已先自動校正與潤飾，並轉換填入下方議程、討論與決議！');
       } else {
         alert(data.error || '轉換失敗');
       }
@@ -2757,11 +2814,11 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* 🎙️ 現場語音 / 口語重點一鍵轉結構化會議紀錄 */}
+            {/* 🎙️ 現場語音 / 手寫稿 / 口語重點一鍵轉結構化會議紀錄 */}
             <div className="card" style={{ marginBottom: '1.15rem', background: '#faf5ff', borderColor: '#d8b4fe' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.6rem' }}>
                 <div style={{ fontWeight: 700, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Mic size={18} /> 🎙️ 語音轉文字 ＆ 講完後自動修正詞句（支援影醫科人名與專有名詞同音校正）
+                  <Mic size={18} /> 🎙️ 語音／📷 手寫稿轉文字 ＆ 智慧潤飾詞句（支援影醫科人名與專有名詞校正）
                 </div>
                 <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
                   <button
@@ -2784,6 +2841,27 @@ export default function HomePage() {
                       </>
                     )}
                   </button>
+                  <label
+                    className="btn btn-secondary"
+                    style={{
+                      margin: 0,
+                      cursor: 'pointer',
+                      padding: '0.38rem 0.85rem',
+                      fontSize: '0.82rem',
+                      background: '#eff6ff',
+                      color: '#1d4ed8',
+                      borderColor: '#93c5fd'
+                    }}
+                  >
+                    <Upload size={14} /> 📷 上傳手寫稿照片{frontendHandwrittenImages.length > 0 ? ` (${frontendHandwrittenImages.length})` : ''}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleFrontendHandwrittenUpload}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
                   <button
                     type="button"
                     onClick={() => handlePolishFrontendTranscript()}
@@ -2797,7 +2875,7 @@ export default function HomePage() {
                       borderColor: '#6ee7b7'
                     }}
                   >
-                    🪄 {polishingVoice ? '校正中...' : '2. 講完後：智慧修正錯別字與詞句'}
+                    🪄 {polishingVoice ? '校正潤飾中...' : '2. 智慧修正錯別字與手寫潤飾'}
                   </button>
                   <button
                     type="button"
@@ -2810,6 +2888,49 @@ export default function HomePage() {
                   </button>
                 </div>
               </div>
+
+              {frontendHandwrittenImages.length > 0 && (
+                <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.55rem' }}>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#1e40af' }}>📷 已載入手寫稿：</span>
+                  {frontendHandwrittenImages.map((img) => (
+                    <div
+                      key={img.id}
+                      style={{
+                        position: 'relative',
+                        width: '54px',
+                        height: '54px',
+                        borderRadius: '6px',
+                        overflow: 'hidden',
+                        border: '1px solid #3b82f6'
+                      }}
+                      title={img.name}
+                    >
+                      <img src={img.dataUrl} alt={img.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      <button
+                        type="button"
+                        onClick={() => setFrontendHandwrittenImages((prev) => prev.filter((x) => x.id !== img.id))}
+                        style={{
+                          position: 'absolute',
+                          top: '1px',
+                          right: '1px',
+                          background: 'rgba(220,38,38,0.9)',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '50%',
+                          width: '16px',
+                          height: '16px',
+                          fontSize: '10px',
+                          lineHeight: '16px',
+                          cursor: 'pointer',
+                          padding: 0
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {isVoiceListening && (
                 <div

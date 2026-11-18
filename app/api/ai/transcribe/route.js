@@ -2,36 +2,36 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 
 const RADIOLOGY_STAFF_NAMES = [
-  '許志賢', '鄭義成', '林宜蓁', '黃玉青', '洪浩泰', '高瑞隆', '潘俊儒',
-  '林彥呈', '楊蕙芳', '余姿樺', '陳憶頡', '吳俊霖', '胡政安', '陳怡伸',
-  '林宜萱', '呂宗潤', '楊貽婷', '施詠勛', '吳思霈', '黃品睿', '葉采誼', '賴思涵'
+  '許志賢', '林宜蓁', '鄭義成', '蘇雅敏', '楊蕙芳', '黃玉青', '洪浩泰',
+  '高瑞隆', '張俐華', '潘俊儒', '林彥呈', '余姿樺', '陳憶頡', '吳俊霖',
+  '伍容君', '胡政安', '陳怡伸', '林宜萱', '呂宗潤', '王采屏', '洪字淳', '張惠鳳'
 ];
 
-// 科內人名、放射醫學專有名詞與常見語音辨識同音錯字校正表
+// 科內人名、放射醫學專有名詞與常見語音/手寫辨識同音形近錯字校正表
 const SPEECH_CORRECTION_RULES = [
-  // 1. 新樓醫院影醫科 24 位人員同音辨識校正
+  // 1. 新樓醫院影醫科 22 位人員同音/形近辨識校正
   { pattern: /[許徐][志智治][賢顯咸閑]/g, target: '許志賢', label: '人名校正' },
   { pattern: /鄭[義亦意議藝][成誠呈城承]/g, target: '鄭義成', label: '人名校正' },
   { pattern: /林[宜怡儀移][蓁真貞珍針]/g, target: '林宜蓁', label: '人名校正' },
+  { pattern: /[蘇甦][雅亞][敏閔]/g, target: '蘇雅敏', label: '人名校正' },
   { pattern: /黃[玉育郁諭][青清卿輕]/g, target: '黃玉青', label: '人名校正' },
   { pattern: /[洪紅鴻][浩皓昊號][泰太態]/g, target: '洪浩泰', label: '人名校正' },
   { pattern: /高[瑞睿][隆龍榮農]/g, target: '高瑞隆', label: '人名校正' },
+  { pattern: /張[俐利莉麗][華樺滑]/g, target: '張俐華', label: '人名校正' },
   { pattern: /潘[俊駿君均][儒如茹盧]/g, target: '潘俊儒', label: '人名校正' },
   { pattern: /林[彥諺晏燕][呈成誠城承]/g, target: '林彥呈', label: '人名校正' },
   { pattern: /楊[蕙惠慧會][芳方芬]/g, target: '楊蕙芳', label: '人名校正' },
   { pattern: /[余于俞魚][姿之芝資知][樺華滑花]/g, target: '余姿樺', label: '人名校正' },
   { pattern: /陳[憶義亦意奕藝][頡傑潔節捷]/g, target: '陳憶頡', label: '人名校正' },
   { pattern: /吳[俊駿君][霖林淋臨]/g, target: '吳俊霖', label: '人名校正' },
+  { pattern: /[伍五吳][容蓉融][君軍均]/g, target: '伍容君', label: '人名校正' },
   { pattern: /胡[政正證禎][安]/g, target: '胡政安', label: '人名校正' },
   { pattern: /陳[怡宜儀移][伸生昇深身]/g, target: '陳怡伸', label: '人名校正' },
   { pattern: /林[宜怡儀移][萱宣軒暄]/g, target: '林宜萱', label: '人名校正' },
   { pattern: /呂[宗忠中][潤論倫輪]/g, target: '呂宗潤', label: '人名校正' },
-  { pattern: /楊[貽怡宜儀移][婷庭亭停]/g, target: '楊貽婷', label: '人名校正' },
-  { pattern: /[施師詩][詠永勇泳][勛勳軒]/g, target: '施詠勛', label: '人名校正' },
-  { pattern: /吳[思詩斯司][霈佩珮配]/g, target: '吳思霈', label: '人名校正' },
-  { pattern: /黃[品平評][睿瑞銳]/g, target: '黃品睿', label: '人名校正' },
-  { pattern: /葉[采彩採][誼儀宜怡移]/g, target: '葉采誼', label: '人名校正' },
-  { pattern: /賴[思詩斯司][涵含韓寒函]/g, target: '賴思涵', label: '人名校正' },
+  { pattern: /王[采彩採][屏萍平瓶]/g, target: '王采屏', label: '人名校正' },
+  { pattern: /[洪紅鴻][字自志智][淳純醇]/g, target: '洪字淳', label: '人名校正' },
+  { pattern: /張[惠蕙慧會][鳳奉]/g, target: '張惠鳳', label: '人名校正' },
 
   // 2. 醫院與放射醫學科專有名詞同音校正
   { pattern: /[心星欣薪]樓(醫院|基督教醫院)?/g, target: '新樓$1', label: '院名校正' },
@@ -102,24 +102,38 @@ function polishAndCorrectTranscript(rawText = '') {
     corrections.push('去除口語贅詞與重複字詞');
   }
 
-  // 3. 口語句型轉正式書面語與標點符號順暢化
+  // 3. 手寫速記符號（如 ->、=>、OK、f/u）擴寫與口語句型轉正式書面語
+  let shorthandExpanded = false;
   const sentences = text
     .split(/\r?\n/)
     .map((line) => {
       let s = line.trim();
       if (!s) return '';
+      const beforeLine = s;
       s = s
+        .replace(/^[※★☆•·\-*]\s*/, '')
+        .replace(/\bf\/u\b/gi, '持續追蹤')
+        .replace(/檢測\s*OK/gi, '檢測結果合格正常')
+        .replace(/品保\s*OK/gi, '品保檢測合格')
+        .replace(/([A-Za-z0-9\u4e00-\u9fa5（）()]+)\s*(?:->|=>|➔|→)\s*(.+)/g, '$1：$2')
         .replace(/要麻煩請/g, '請')
         .replace(/請幫我們追蹤一下/g, '請負責追蹤')
         .replace(/大家討論結果決定說/g, '經討論決議：')
         .replace(/最後決定就是/g, '決議：')
         .replace(/\s+/g, ' ');
+      if (s !== beforeLine) {
+        shorthandExpanded = true;
+      }
       if (!/[。！？；：:]$/.test(s)) {
         s += '。';
       }
       return s;
     })
     .filter(Boolean);
+
+  if (shorthandExpanded && !corrections.includes('手寫速記符號與簡寫自動潤飾擴寫')) {
+    corrections.push('手寫速記符號與簡寫自動潤飾擴寫');
+  }
 
   const finalPolished = sentences.join('\n');
   return {
@@ -313,26 +327,42 @@ export async function POST(request) {
       meetingTitle = '',
       audioBase64 = null,
       audioMimeType = 'audio/mp3',
+      handwrittenImages = [],
       customApiKey = ''
     } = body;
+
+    const validImages = Array.isArray(handwrittenImages)
+      ? handwrittenImages.filter((img) => img && img.base64)
+      : [];
 
     const settings = (await db.read('settings.json')) || {};
     const apiKey = (customApiKey || settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
 
-    // 先以內建放射科專有名詞與科內 24 位人名同音字典進行初步校正
+    // 先以內建放射科專有名詞與科內 22 位人名同音字典進行初步校正與手寫速記潤飾
     const { correctedText: preCorrectedText, corrections } = polishAndCorrectTranscript(transcript);
 
-    // 若使用者點選「🪄 講完後：智慧修正錯別字與潤飾詞句」
-    if (action === 'polish_transcript') {
-      if (!transcript.trim()) {
-        return NextResponse.json({ error: '目前尚無語音逐字稿內容可供修正' }, { status: 400 });
+    // 若使用者點選「📷 辨識手寫稿並潤飾」或「🪄 講完後：智慧修正錯別字與潤飾詞句」
+    if (action === 'polish_transcript' || action === 'extract_handwritten') {
+      if (!transcript.trim() && validImages.length === 0) {
+        return NextResponse.json({ error: '請先上傳手寫稿照片、進行語音辨識或輸入筆記內容可供修正潤飾' }, { status: 400 });
       }
 
-      // 若有設定 Gemini API Key，結合 Gemini 進行上下文語意校正與口語通順化
+      // 若有設定 Gemini API Key，結合 Gemini 進行手寫影像辨識 (Vision OCR) 與醫療上下文潤飾
       if (apiKey) {
         try {
-          const polishPrompt = `你現在是「新樓基督教醫院 影像醫學科」的專業醫療語音辨識校正師。
-請將以下由「即時語音辨識」產生的口語逐字稿，修正同音錯別字、放射科醫學術語、科內人員姓名，並將斷裂的口語句子潤飾為通順、自然的繁體中文句子（請保留原本的所有語意、數據與人名，不要刪減重要資訊）。
+          const isHandwrittenMode = validImages.length > 0;
+          const polishPrompt = isHandwrittenMode
+            ? `你現在是「新樓基督教醫院 影像醫學科」的資深醫療會議秘書與手寫辨識專家。
+請仔細辨識附帶圖片中的「手寫會議筆記 / 速記稿」，將手寫字跡、縮寫（如 CT、MRI、Mammo、EPA、CCC、PGY、PACS、RIS、f/u、-> 箭頭等）、塗改痕跡與條列重點，完整轉換並潤飾為通順、正式、條理分明的繁體中文會議筆記文字（請保留所有數據、日期与人名）。
+${preCorrectedText ? `\n使用者額外補充之文字說明：\n${preCorrectedText}\n` : ''}
+本院影像醫學科 22 位在職人員正確姓名供手寫辨識與同音校正參考：${RADIOLOGY_STAFF_NAMES.join('、')}。
+請只回傳合法 JSON 物件：
+{
+  "correctedText": "辨識手寫稿並潤飾擴寫後的完整正式會議紀錄文字（可分段條列）",
+  "extraCorrections": ["說明辨識與潤飾了哪些手寫速記、專有名詞或人名，例如：手寫速記箭頭擴寫為正式決議句、校正人名與放射科術語"]
+}`
+            : `你現在是「新樓基督教醫院 影像醫學科」的專業醫療語音與手寫筆記校正師。
+請將以下口語逐字稿或手寫速記文字，修正同音錯別字、放射科醫學術語、科內人員姓名，並將斷裂的口語或速記句子潤飾為通順、自然的正式繁體中文句子（請保留原本的所有語意、數據與人名，不要刪減重要資訊）。
 本院影像醫學科人員正確姓名供同音校正參考：${RADIOLOGY_STAFF_NAMES.join('、')}。
 請只回傳合法 JSON 物件：
 {
@@ -340,8 +370,19 @@ export async function POST(request) {
   "extraCorrections": ["說明修正了哪些同音字或語句，例如：將『評保』修正為『品保』"]
 }
 
-原始語音辨識文字：
+原始輸入文字：
 ${preCorrectedText}`;
+
+          const polishParts = [];
+          validImages.forEach((img) => {
+            polishParts.push({
+              inlineData: {
+                mimeType: img.mimeType || 'image/jpeg',
+                data: img.base64
+              }
+            });
+          });
+          polishParts.push({ text: polishPrompt });
 
           const geminiRes = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -349,7 +390,7 @@ ${preCorrectedText}`;
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ parts: [{ text: polishPrompt }] }],
+                contents: [{ parts: polishParts }],
                 generationConfig: {
                   temperature: 0.15,
                   responseMimeType: 'application/json'
@@ -366,48 +407,61 @@ ${preCorrectedText}`;
             const allCorrections = [...corrections, ...(parsed.extraCorrections || [])];
             return NextResponse.json({
               success: true,
-              mode: 'Gemini AI 醫療語意校正 + 科內專有名詞字典',
+              mode: isHandwrittenMode
+                ? `Gemini Vision 手寫影像辨識與潤飾 (${validImages.length} 張圖片)`
+                : 'Gemini AI 醫療語意校正 + 科內專有名詞字典',
               correctedTranscript: parsed.correctedText || preCorrectedText,
               corrections: allCorrections,
-              message:
-                allCorrections.length > 0
-                  ? `✨ 已自動完成詞句潤飾與同音校正（${allCorrections.slice(0, 4).join('、')}）`
-                  : '✨ 已完成全篇語句標點與通順度潤飾！'
+              message: isHandwrittenMode
+                ? `📷 已成功辨識 ${validImages.length} 張手寫稿照片並潤飾為正式會議文字！`
+                : allCorrections.length > 0
+                ? `✨ 已自動完成詞句潤飾與同音校正（${allCorrections.slice(0, 4).join('、')}）`
+                : '✨ 已完成全篇語句標點與通順度潤飾！'
             });
           }
         } catch (err) {
-          console.error('Gemini polish fallback to offline:', err);
+          console.error('Gemini polish/handwritten fallback to offline:', err);
         }
+      }
+
+      if (!transcript.trim() && validImages.length > 0 && !apiKey) {
+        return NextResponse.json(
+          {
+            error:
+              '直接由手寫稿「照片圖檔」進行 AI 視覺辨識，需先於下方或後台「系統設定」填入免費的 Google Gemini API Key；若無金鑰，您也可以直接在文字框輸入或貼上手寫速記重點，或點擊「🧪 載入手寫速記範例」測試離線潤飾與結構化轉換！'
+          },
+          { status: 400 }
+        );
       }
 
       return NextResponse.json({
         success: true,
-        mode: '影醫科專有名詞與人名同音校正引擎',
+        mode: '影醫科專有名詞與手寫速記潤飾引擎',
         correctedTranscript: preCorrectedText,
         corrections,
         message:
           corrections.length > 0
-            ? `✨ 已為您修正 ${corrections.length} 處同音詞與語句：${corrections.slice(0, 4).join('、')}`
-            : '✨ 已完成口語贅字清理、標點斷句與詞句潤飾！'
+            ? `✨ 已為您修正並潤飾 ${corrections.length} 處速記與語句：${corrections.slice(0, 4).join('、')}`
+            : '✨ 已完成手寫速記擴寫、口語贅字清理與標點潤飾！'
       });
     }
 
     // 進入結構化整理前，自動使用已校正過同音錯字與人名的逐字稿
     const effectiveTranscript = preCorrectedText || transcript;
 
-    // 若有設定 Gemini API Key，優先呼叫 Google Gemini 多模態模型進行音訊轉譯與結構化整理
+    // 若有設定 Gemini API Key，優先呼叫 Google Gemini 多模態模型進行音訊/手寫圖片轉譯與結構化整理
     if (apiKey) {
       const systemInstruction = TEMPLATE_PROMPTS[category] || TEMPLATE_PROMPTS.dept;
       const schemaInstruction = `
 請務必只回傳合法的 JSON 物件（不要加上 markdown \`\`\`json 標籤），格式如下：
 {
   "title": "建議的正式會議標題",
-  "transcript": "若輸入為音訊檔，請附上完整繁體中文逐字稿；若輸入為文字則保留原文字或潤飾後逐字稿",
+  "transcript": "若輸入為手寫稿圖片或音訊檔，請附上辨識並潤飾後的完整繁體中文會議筆記/逐字稿；若輸入為文字則保留潤飾後文字",
   "agendaItems": ["1. 議程一", "2. 議程二"],
   "discussionSections": [
     {
       "heading": "1. 討論主題標題",
-      "bullets": ["具體討論重點條列一", "具體討論重點條列二"]
+      "bullets": ["具體討論重點條列一（請將手寫簡寫或口語潤飾為完整正式語句）", "具體討論重點條列二"]
     }
   ],
   "resolutions": ["決議事項一", "決議事項二"],
@@ -422,7 +476,7 @@ ${preCorrectedText}`;
   ],
   "presentStaffNames": ["偵測到的科內人員姓名"]
 }
-本院影像醫學科常見人員名單供辨識校正參考：${RADIOLOGY_STAFF_NAMES.join('、')}。`;
+本院影像醫學科 22 位在職人員名單供辨識校正參考：${RADIOLOGY_STAFF_NAMES.join('、')}。`;
 
       const parts = [];
       if (audioBase64) {
@@ -433,8 +487,22 @@ ${preCorrectedText}`;
           }
         });
       }
+      validImages.forEach((img) => {
+        parts.push({
+          inlineData: {
+            mimeType: img.mimeType || 'image/jpeg',
+            data: img.base64
+          }
+        });
+      });
       parts.push({
-        text: `${systemInstruction}\n${schemaInstruction}\n\n會議預設標題：${meetingTitle || '未指定'}\n使用者輸入之會議語音逐字稿或筆記內容：\n${effectiveTranscript || '（請直接由上方附帶的錄音檔轉譯並整理為結構化會議紀錄）'}`
+        text: `${systemInstruction}\n${schemaInstruction}\n\n會議預設標題：${meetingTitle || '未指定'}\n${
+          validImages.length > 0
+            ? `已附帶 ${validImages.length} 張手寫會議筆記照片，請仔細辨識手寫內容並擴寫潤飾為正式會議紀錄。\n`
+            : ''
+        }使用者輸入之會議語音逐字稿或手寫速記內容：\n${
+          effectiveTranscript || '（請直接由上方附帶的手寫筆記圖片或錄音檔轉譯，並潤飾整理為結構化會議紀錄）'
+        }`
       });
 
       const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash'];
@@ -462,10 +530,15 @@ ${preCorrectedText}`;
             const parsed = JSON.parse(cleanedJson);
             return NextResponse.json({
               success: true,
-              mode: `gemini (${modelName})`,
+              mode:
+                validImages.length > 0
+                  ? `Gemini Vision 手寫稿辨識與結構化 (${modelName})`
+                  : `gemini (${modelName})`,
+              correctedTranscript: parsed.transcript || effectiveTranscript,
+              corrections,
               result: {
                 title: (meetingTitle || '').trim() || parsed.title || '影像醫學科 會議紀錄',
-                transcript: parsed.transcript || transcript,
+                transcript: parsed.transcript || effectiveTranscript || transcript,
                 agendaItems: parsed.agendaItems || [],
                 discussionSections: parsed.discussionSections || [],
                 resolutions: parsed.resolutions || [],
@@ -487,10 +560,13 @@ ${preCorrectedText}`;
     }
 
     // 若無 API Key 或僅有文字逐字稿，使用內建智慧結構化引擎
-    if (!transcript.trim() && audioBase64 && !apiKey) {
+    if (!transcript.trim() && (audioBase64 || validImages.length > 0) && !apiKey) {
       return NextResponse.json(
         {
-          error: '上傳錄音檔直接轉譯需要設定 Google Gemini API Key（可於後台「系統設定」免費填入），或請直接使用頁面上的「瀏覽器即時麥克風語音辨識（免金鑰）」功能！'
+          error:
+            validImages.length > 0
+              ? '上傳手寫稿照片直接進行 AI 視覺辨識，需要設定免費的 Google Gemini API Key（可於後台「系統設定」填入）；或請搭配下方文字框輸入手寫重點／點選「載入手寫速記範例」進行免金鑰智慧潤飾轉換！'
+              : '上傳錄音檔直接轉譯需要設定 Google Gemini API Key（可於後台「系統設定」免費填入），或請直接使用頁面上的「瀏覽器即時麥克風語音辨識（免金鑰）」功能！'
         },
         { status: 400 }
       );
@@ -499,14 +575,14 @@ ${preCorrectedText}`;
     const offlineResult = buildSmartOfflineStructuredMinutes(effectiveTranscript, category, meetingTitle);
     return NextResponse.json({
       success: true,
-      mode: '內建智慧會議結構化引擎（含同音校正）',
+      mode: '內建智慧會議結構化引擎（含同音與手寫速記潤飾）',
       correctedTranscript: effectiveTranscript,
       corrections,
       result: offlineResult
     });
   } catch (error) {
     console.error('AI Transcribe Route Error:', error);
-    return NextResponse.json({ error: '語音轉換與結構化整理發生錯誤' }, { status: 500 });
+    return NextResponse.json({ error: '語音/手寫稿轉換與結構化整理發生錯誤' }, { status: 500 });
   }
 }
 

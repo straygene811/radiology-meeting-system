@@ -107,6 +107,8 @@ export default function AdminDashboardPage() {
   const [uploadedAudioFile, setUploadedAudioFile] = useState(null);
   const [uploadedAudioBase64, setUploadedAudioBase64] = useState(null);
   const [uploadedAudioMime, setUploadedAudioMime] = useState('audio/mp3');
+  const [uploadedHandwrittenImages, setUploadedHandwrittenImages] = useState([]);
+  const [attachHandwrittenToMeeting, setAttachHandwrittenToMeeting] = useState(true);
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiModeUsed, setAiModeUsed] = useState('');
@@ -663,11 +665,11 @@ export default function AdminDashboardPage() {
     await saveUpdatedCategories(next, `🗑️ 已刪除會議種類「${cat.name}」`);
   };
 
-  // ==================== Tab 2: 語音轉會議紀錄 & 講完後自動修正詞句 ====================
+  // ==================== Tab 2: 語音/手寫稿轉會議紀錄 & 講完後自動修正詞句 ====================
   const handlePolishTranscript = async (textOverride = null, silentIfEmpty = false) => {
     const raw = (textOverride !== null ? textOverride : rawTranscript || '').trim();
-    if (!raw) {
-      if (!silentIfEmpty) alert('請先進行語音辨識或輸入逐字稿內容後，再執行智慧修正詞句！');
+    if (!raw && uploadedHandwrittenImages.length === 0) {
+      if (!silentIfEmpty) alert('請先上傳手寫稿照片、進行語音辨識或輸入逐字稿內容後，再執行智慧修正潤飾！');
       return;
     }
     setPolishingTranscript(true);
@@ -676,8 +678,13 @@ export default function AdminDashboardPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'polish_transcript',
-          transcript: raw
+          action: uploadedHandwrittenImages.length > 0 ? 'extract_handwritten' : 'polish_transcript',
+          transcript: raw,
+          handwrittenImages: uploadedHandwrittenImages.map((img) => ({
+            base64: img.base64,
+            mimeType: img.mimeType,
+            name: img.name
+          }))
         })
       });
       const data = await res.json();
@@ -686,7 +693,9 @@ export default function AdminDashboardPage() {
         setRawTranscript(data.correctedTranscript);
         latestRawTranscriptRef.current = data.correctedTranscript;
         setTranscriptCorrections(data.corrections || []);
-        showToast(data.message || '✨ 已完成同音錯別字校正與詞句潤飾！');
+        showToast(data.message || '✨ 已完成手寫稿/同音錯別字校正與詞句潤飾！');
+      } else if (!res.ok && data.error && !silentIfEmpty) {
+        alert(data.error);
       }
     } catch (err) {
       console.error('Polish transcript error:', err);
@@ -800,9 +809,52 @@ export default function AdminDashboardPage() {
     reader.readAsDataURL(file);
   };
 
+  const handleHandwrittenImageUpload = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxW = 1280;
+          let w = img.width;
+          let h = img.height;
+          if (w > maxW) {
+            h = Math.round((h * maxW) / w);
+            w = maxW;
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          const base64 = String(compressedDataUrl).split(',')[1] || '';
+          setUploadedHandwrittenImages((prev) => [
+            ...prev,
+            {
+              id: `HW-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              name: file.name,
+              mimeType: 'image/jpeg',
+              base64,
+              dataUrl: compressedDataUrl
+            }
+          ]);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    showToast(`📷 已載入 ${files.length} 張手寫稿照片，可點選「辨識手寫稿並潤飾」或直接轉成正式會議紀錄！`);
+    e.target.value = '';
+  };
+
   const handleRunAiStructuring = async () => {
-    if (!rawTranscript.trim() && !uploadedAudioBase64) {
-      alert('請先使用麥克風錄音說話、上傳錄音檔、貼上逐字稿，或點選範例語音稿！');
+    if (!rawTranscript.trim() && !uploadedAudioBase64 && uploadedHandwrittenImages.length === 0) {
+      alert('請先使用麥克風錄音說話、上傳手寫稿照片、上傳錄音檔、貼上逐字稿，或點選範例測試稿！');
       return;
     }
 
@@ -816,7 +868,12 @@ export default function AdminDashboardPage() {
           category: voiceCategory,
           meetingTitle: voiceMeetingTitle,
           audioBase64: uploadedAudioBase64,
-          audioMimeType: uploadedAudioMime
+          audioMimeType: uploadedAudioMime,
+          handwrittenImages: uploadedHandwrittenImages.map((img) => ({
+            base64: img.base64,
+            mimeType: img.mimeType,
+            name: img.name
+          }))
         })
       });
 
@@ -824,15 +881,22 @@ export default function AdminDashboardPage() {
       if (res.ok && data.success) {
         setAiResult(data.result);
         setAiModeUsed(data.mode || '');
-        if (data.result.transcript && !rawTranscript.trim()) {
+        if (data.correctedTranscript) {
+          setRawTranscript(data.correctedTranscript);
+          latestRawTranscriptRef.current = data.correctedTranscript;
+        } else if (data.result.transcript && !rawTranscript.trim()) {
           setRawTranscript(data.result.transcript);
+          latestRawTranscriptRef.current = data.result.transcript;
+        }
+        if (data.corrections?.length) {
+          setTranscriptCorrections(data.corrections);
         }
         showToast(`✨ 已透過「${data.mode}」完成結構化會議紀錄整理！`);
       } else {
         alert(data.error || '轉換失敗');
       }
     } catch (err) {
-      alert('語音結構化處理發生錯誤');
+      alert('語音/手寫稿結構化處理發生錯誤');
     } finally {
       setAiProcessing(false);
     }
@@ -3228,10 +3292,104 @@ export default function AdminDashboardPage() {
                 )}
               </div>
             </div>
+
+            <div className="card" style={{ background: '#ecfdf5', borderColor: '#6ee7b7' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.96rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#065f46' }}>
+                <FileText size={18} color="#059669" /> 方式 C：📷 上傳手寫稿／筆記照片轉換潤飾（備用）
+              </div>
+              <div style={{ fontSize: '0.83rem', color: '#047857', marginBottom: '0.85rem' }}>
+                支援拍攝或上傳 1～多張手寫會議筆記照片，自動辨識手寫字與醫療縮寫並潤飾為正式會議紀錄。
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
+                <label className="btn btn-success" style={{ margin: 0, cursor: 'pointer', padding: '0.45rem 0.85rem', fontSize: '0.84rem' }}>
+                  <Upload size={15} /> 📷 選擇手寫稿照片上傳
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleHandwrittenImageUpload}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                {uploadedHandwrittenImages.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handlePolishTranscript()}
+                    disabled={polishingTranscript}
+                    className="btn btn-secondary"
+                    style={{ padding: '0.42rem 0.75rem', fontSize: '0.8rem', borderColor: '#059669', color: '#065f46' }}
+                  >
+                    🪄 {polishingTranscript ? '辨識潤飾中...' : `辨識並潤飾 (${uploadedHandwrittenImages.length}張)`}
+                  </button>
+                )}
+              </div>
+
+              {uploadedHandwrittenImages.length > 0 && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.45rem' }}>
+                    {uploadedHandwrittenImages.map((img) => (
+                      <div
+                        key={img.id}
+                        style={{
+                          position: 'relative',
+                          border: '1px solid #10b981',
+                          borderRadius: '8px',
+                          overflow: 'hidden',
+                          background: '#ffffff',
+                          width: '68px',
+                          height: '68px'
+                        }}
+                        title={img.name}
+                      >
+                        <img
+                          src={img.dataUrl}
+                          alt={img.name}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setUploadedHandwrittenImages((prev) => prev.filter((item) => item.id !== img.id))
+                          }
+                          style={{
+                            position: 'absolute',
+                            top: '2px',
+                            right: '2px',
+                            background: 'rgba(220,38,38,0.9)',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '50%',
+                            width: '18px',
+                            height: '18px',
+                            fontSize: '11px',
+                            lineHeight: '18px',
+                            cursor: 'pointer',
+                            padding: 0
+                          }}
+                          title="移除此張手寫稿"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: '#065f46', cursor: 'pointer', margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={attachHandwrittenToMeeting}
+                      onChange={(e) => setAttachHandwrittenToMeeting(e.target.checked)}
+                      style={{ width: '14px', height: '14px' }}
+                    />
+                    轉入會議紀錄時，一併將手寫稿照片存為會議附件備查
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={{ marginBottom: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#475569' }}>💡 快速載入科內真實會議口語範例測試：</span>
+            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#475569' }}>💡 快速載入科內真實會議口語／手寫速記範例測試：</span>
             <button
               type="button"
               onClick={() => {
@@ -3275,6 +3433,22 @@ export default function AdminDashboardPage() {
               style={{ padding: '0.3rem 0.7rem', fontSize: '0.78rem', background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
             >
               🧪 載入「含同音錯別字」測試稿（測試一鍵修正詞句）
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setVoiceCategory('qa');
+                setVoiceMeetingTitle('115 年影像醫學科 品保暨科務手寫筆記測試會議');
+                setTranscriptCorrections([]);
+                setRawTranscript(
+                  '※ 主席許志賢 -> 115年CT與乳房品保OK，感謝鄭義成、林宜蓁、潘俊儒、陳憶頡協助\n★ 急診CT管球與假体檢測 -> 檢測OK，請洪浩泰、吳俊霖 f/u 每週校驗紀錄\n★ 數位乳房攝影品保 -> 黃玉青、楊蕙芳已完成年度品保歸檔，千衣與劑量配章查核正常\n★ 決議 -> 通過本季CT暨乳房品保報告，請潘俊儒與余姿樺於月底前完成無紙化會議簽核宣導'
+                );
+                showToast('✍️ 已載入「手寫速記草稿」範例，請點選下方綠色「🪄 智慧修正錯別字與潤飾詞句」或紫色「✨ 一鍵轉換為正式會議紀錄」！');
+              }}
+              className="btn btn-secondary"
+              style={{ padding: '0.3rem 0.7rem', fontSize: '0.78rem', background: '#ecfdf5', color: '#065f46', borderColor: '#6ee7b7' }}
+            >
+              ✍️ 載入「手寫速記草稿」範例（測試手寫縮寫與箭頭潤飾）
             </button>
           </div>
 
@@ -3365,7 +3539,7 @@ export default function AdminDashboardPage() {
               style={{ padding: '0.8rem 1.5rem', fontSize: '1rem' }}
             >
               <Sparkles size={18} />{' '}
-              {aiProcessing ? '正在進行 AI 智慧結構化整理...' : '✨ 一鍵將語音/逐字稿轉換為正式會議紀錄'}
+              {aiProcessing ? '正在進行 AI 智慧結構化整理...' : '✨ 一鍵將語音 / 手寫稿 / 逐字稿轉換為正式會議紀錄'}
             </button>
             <button
               type="button"
@@ -3374,6 +3548,7 @@ export default function AdminDashboardPage() {
                 setAiResult(null);
                 setUploadedAudioFile(null);
                 setUploadedAudioBase64(null);
+                setUploadedHandwrittenImages([]);
               }}
               className="btn btn-secondary"
             >
@@ -3422,6 +3597,17 @@ export default function AdminDashboardPage() {
                         aiResult.presentStaffNames?.length > 0
                           ? aiResult.presentStaffNames
                           : activeStaffMembers.map((s) => s.name),
+                      attachments:
+                        attachHandwrittenToMeeting && uploadedHandwrittenImages.length > 0
+                          ? uploadedHandwrittenImages.map((img, idx) => ({
+                              id: `ATT-HW-${Date.now()}-${idx}`,
+                              title: `手寫會議筆記原稿 (${idx + 1}) - ${img.name}`,
+                              fileName: img.name,
+                              mimeType: img.mimeType || 'image/jpeg',
+                              url: img.dataUrl,
+                              category: '手寫會議筆記原稿'
+                            }))
+                          : [],
                       rawTranscript
                     })
                   }
