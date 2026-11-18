@@ -495,8 +495,18 @@ ${preCorrectedText}`;
           }
         });
       });
+      const hasVoiceAndHandwritten =
+        validImages.length > 0 && (Boolean(audioBase64) || Boolean(effectiveTranscript.trim()));
+
+      const crossAnalysisInstruction = hasVoiceAndHandwritten
+        ? `\n【🔥 語音 ＋ 手寫稿 雙重交叉比對分析指令（極重要）】：
+1. 以「手寫筆記圖片」作為主幹大綱與專有名詞／數據／日期／人名的優先基準，修正語音中可能產生的同音誤判。
+2. 以「語音錄音 / 語音逐字稿」的完整脈絡，補齊手寫稿上僅寫關鍵字或箭頭的簡略內容，擴寫為通順、正式的醫院會議紀錄句子。
+3. 依據手寫筆記標示的重點，自動過濾語音中的閒聊或非會議重點內容。\n`
+        : '';
+
       parts.push({
-        text: `${systemInstruction}\n${schemaInstruction}\n\n會議預設標題：${meetingTitle || '未指定'}\n${
+        text: `${systemInstruction}\n${crossAnalysisInstruction}${schemaInstruction}\n\n會議預設標題：${meetingTitle || '未指定'}\n${
           validImages.length > 0
             ? `已附帶 ${validImages.length} 張手寫會議筆記照片，請仔細辨識手寫內容並擴寫潤飾為正式會議紀錄。\n`
             : ''
