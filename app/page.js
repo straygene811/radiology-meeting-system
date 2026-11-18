@@ -122,6 +122,7 @@ export default function HomePage() {
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [aiStructuringLoading, setAiStructuringLoading] = useState(false);
   const [frontendHandwrittenImages, setFrontendHandwrittenImages] = useState([]);
+  const [savingFrontendDraftInbox, setSavingFrontendDraftInbox] = useState(false);
   const speechRecRef = useRef(null);
   const latestVoiceTextRef = useRef('');
 
@@ -808,6 +809,39 @@ export default function HomePage() {
     speechRecRef.current = rec;
     rec.start();
     setIsVoiceListening(true);
+  };
+
+  const handleSaveFrontendDraftInbox = async () => {
+    if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0) {
+      alert('請先使用麥克風錄音轉文字、輸入速記內容或上傳手寫稿照片後再暫存至雲端！');
+      return;
+    }
+    setSavingFrontendDraftInbox(true);
+    try {
+      const res = await fetch('/api/draft-inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_draft',
+          category: staffDraftMeeting?.category || 'dept',
+          meetingTitle: staffDraftMeeting?.title || '',
+          date: staffDraftMeeting?.date || new Date().toISOString().slice(0, 10),
+          createdBy: currentUser?.name || staffDraftMeeting?.recorder || '科內紀錄人',
+          transcript: voiceQuickText,
+          handwrittenImages: frontendHandwrittenImages
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(data.message || '☁️ 已成功暫存至雲端草稿匣！回電腦打開 IDE 即可請 AI 直接抓取分析。');
+      } else {
+        alert(data.error || '暫存失敗');
+      }
+    } catch (err) {
+      alert('暫存至雲端發生錯誤');
+    } finally {
+      setSavingFrontendDraftInbox(false);
+    }
   };
 
   const handleRunFrontendAiStructuring = async () => {
@@ -2885,6 +2919,20 @@ export default function HomePage() {
                     style={{ padding: '0.38rem 0.9rem', fontSize: '0.82rem' }}
                   >
                     <Sparkles size={15} /> {aiStructuringLoading ? '轉換中...' : '3. ✨ 一鍵轉成正式議程與決議'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveFrontendDraftInbox}
+                    disabled={savingFrontendDraftInbox}
+                    className="btn"
+                    style={{
+                      padding: '0.38rem 0.85rem',
+                      fontSize: '0.82rem',
+                      background: '#0284c7',
+                      color: '#ffffff'
+                    }}
+                  >
+                    ☁️ {savingFrontendDraftInbox ? '雲端暫存中...' : '暫存至雲端（回電腦用 IDE 整理）'}
                   </button>
                 </div>
               </div>

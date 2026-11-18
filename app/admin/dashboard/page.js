@@ -104,11 +104,14 @@ export default function AdminDashboardPage() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordedAudioUrl, setRecordedAudioUrl] = useState(null);
+  const [recordedAudioBase64, setRecordedAudioBase64] = useState(null);
   const [uploadedAudioFile, setUploadedAudioFile] = useState(null);
   const [uploadedAudioBase64, setUploadedAudioBase64] = useState(null);
   const [uploadedAudioMime, setUploadedAudioMime] = useState('audio/mp3');
   const [uploadedHandwrittenImages, setUploadedHandwrittenImages] = useState([]);
   const [attachHandwrittenToMeeting, setAttachHandwrittenToMeeting] = useState(true);
+  const [draftInboxItems, setDraftInboxItems] = useState([]);
+  const [savingDraftInbox, setSavingDraftInbox] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiModeUsed, setAiModeUsed] = useState('');
@@ -150,9 +153,10 @@ export default function AdminDashboardPage() {
 
   const loadDashboardData = async () => {
     try {
-      const [resMtg, resSet] = await Promise.all([
+      const [resMtg, resSet, resInbox] = await Promise.all([
         fetch('/api/meetings'),
-        fetch('/api/settings')
+        fetch('/api/settings'),
+        fetch('/api/draft-inbox').catch(() => null)
       ]);
 
       if (resSet.status === 401) {
@@ -162,6 +166,12 @@ export default function AdminDashboardPage() {
 
       const mtgData = await resMtg.json();
       const setData = await resSet.json();
+      if (resInbox && resInbox.ok) {
+        try {
+          const inboxData = await resInbox.json();
+          setDraftInboxItems(inboxData.items || []);
+        } catch {}
+      }
 
       const loadedMeetings = mtgData.meetings || [];
       setMeetings(loadedMeetings);
@@ -752,7 +762,12 @@ export default function AdminDashboardPage() {
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaRecorder = new MediaRecorder(stream);
+        let mediaRecorder;
+        try {
+          mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+        } catch {
+          mediaRecorder = new MediaRecorder(stream);
+        }
         const chunks = [];
         mediaRecorder.ondataavailable = (e) => {
           if (e.data.size > 0) chunks.push(e.data);
@@ -761,6 +776,12 @@ export default function AdminDashboardPage() {
           const blob = new Blob(chunks, { type: 'audio/webm' });
           const url = URL.createObjectURL(blob);
           setRecordedAudioUrl(url);
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const b64 = String(ev.target.result || '').split(',')[1] || '';
+            setRecordedAudioBase64(b64);
+          };
+          reader.readAsDataURL(blob);
           stream.getTracks().forEach((track) => track.stop());
         };
         mediaRecorder.start();
@@ -804,7 +825,7 @@ export default function AdminDashboardPage() {
       const dataUrl = ev.target.result || '';
       const base64 = String(dataUrl).split(',')[1] || '';
       setUploadedAudioBase64(base64);
-      showToast(`🎵 已載入錄音檔「${file.name}」，可點擊下方按鈕進行 AI 轉譯與結構化整理`);
+      showToast(`🎵 已載入錄音檔「${file.name}」，可點擊下方按鈕進行 AI 轉譯或暫存至雲端草稿匣`);
     };
     reader.readAsDataURL(file);
   };
@@ -848,8 +869,86 @@ export default function AdminDashboardPage() {
       reader.readAsDataURL(file);
     });
 
-    showToast(`📷 已載入 ${files.length} 張手寫稿照片，可點選「辨識手寫稿並潤飾」或直接轉成正式會議紀錄！`);
+    showToast(`📷 已載入 ${files.length} 張手寫稿照片，可點選「☁️ 暫存至雲端供 IDE 分析」或直接轉成正式會議紀錄！`);
     e.target.value = '';
+  };
+
+  const handleSaveToDraftInbox = async () => {
+    const effectiveAudioB64 = uploadedAudioBase64 || recordedAudioBase64 || null;
+    if (!rawTranscript.trim() && uploadedHandwrittenImages.length === 0 && !effectiveAudioB64) {
+      alert('請先錄音、輸入語音逐字稿、上傳手寫稿照片或上傳錄音檔後，再暫存至雲端草稿匣！');
+      return;
+    }
+
+    setSavingDraftInbox(true);
+    try {
+      const res = await fetch('/api/draft-inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_draft',
+          category: voiceCategory,
+          meetingTitle: voiceMeetingTitle,
+          createdBy: approvalApproverName || '管理員/紀錄人',
+          transcript: rawTranscript,
+          handwrittenImages: uploadedHandwrittenImages,
+          audioBase64: effectiveAudioB64,
+          audioMimeType: uploadedAudioBase64 ? uploadedAudioMime : 'audio/webm',
+          audioFileName: uploadedAudioFile?.name || `會議錄音_${new Date().toISOString().slice(0, 10)}.webm`
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setDraftInboxItems(data.items || []);
+        showToast(data.message || '☁️ 已成功暫存至雲端草稿匣！回到電腦打開 IDE 即可請 AI 直接抓取分析。');
+      } else {
+        alert(data.error || '暫存失敗');
+      }
+    } catch (err) {
+      alert('暫存至雲端草稿匣發生錯誤');
+    } finally {
+      setSavingDraftInbox(false);
+    }
+  };
+
+  const handleDeleteDraftInboxItem = async (id) => {
+    try {
+      const res = await fetch('/api/draft-inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_draft', id })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setDraftInboxItems(data.items || []);
+        showToast('🗑️ 已刪除該筆雲端暫存草稿');
+      }
+    } catch {}
+  };
+
+  const handleLoadDraftInboxItem = (item) => {
+    if (!item) return;
+    setVoiceCategory(item.category || 'dept');
+    setVoiceMeetingTitle(item.meetingTitle === '未命名會議草稿（待 IDE 整理）' ? '' : item.meetingTitle || '');
+    setRawTranscript(item.transcript || '');
+    latestRawTranscriptRef.current = item.transcript || '';
+    if (Array.isArray(item.handwrittenImages) && item.handwrittenImages.length > 0) {
+      setUploadedHandwrittenImages(
+        item.handwrittenImages.map((img, i) => ({
+          id: img.id || `HW-LOAD-${i}`,
+          name: img.name || `handwritten_${i + 1}.jpg`,
+          mimeType: img.mimeType || 'image/jpeg',
+          base64: String(img.dataUrl || '').split(',')[1] || '',
+          dataUrl: img.dataUrl
+        }))
+      );
+    }
+    if (item.audioBase64) {
+      setUploadedAudioBase64(item.audioBase64);
+      setUploadedAudioMime(item.audioMimeType || 'audio/webm');
+      setUploadedAudioFile({ name: item.audioFileName || '雲端暫存錄音檔.webm' });
+    }
+    showToast(`📂 已將「${item.meetingTitle}」的手寫稿與語音載入上方工作台！`);
   };
 
   const handleRunAiStructuring = async () => {
@@ -3530,7 +3629,7 @@ export default function AdminDashboardPage() {
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
             <button
               type="button"
               onClick={handleRunAiStructuring}
@@ -3543,17 +3642,113 @@ export default function AdminDashboardPage() {
             </button>
             <button
               type="button"
+              onClick={handleSaveToDraftInbox}
+              disabled={savingDraftInbox}
+              className="btn"
+              style={{
+                padding: '0.8rem 1.25rem',
+                fontSize: '0.96rem',
+                background: '#0284c7',
+                color: '#ffffff'
+              }}
+            >
+              <Cloud size={18} />{' '}
+              {savingDraftInbox ? '正在上傳暫存至雲端...' : '☁️ 暫存語音＋手寫稿至雲端（回電腦用 IDE 抓取分析）'}
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 setRawTranscript('');
                 setAiResult(null);
                 setUploadedAudioFile(null);
                 setUploadedAudioBase64(null);
+                setRecordedAudioBase64(null);
                 setUploadedHandwrittenImages([]);
               }}
               className="btn btn-secondary"
             >
               清空重來
             </button>
+          </div>
+
+          {/* 📥 雲端暫存草稿匣（待 IDE 分析清單） */}
+          <div
+            className="card"
+            style={{
+              background: '#f0f9ff',
+              borderColor: '#7dd3fc',
+              marginBottom: '1.5rem',
+              padding: '1rem 1.15rem'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.6rem' }}>
+              <div style={{ fontWeight: 700, color: '#0369a1', fontSize: '0.96rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <Cloud size={18} color="#0284c7" /> 📥 雲端語音＋手寫稿暫存草稿匣（目前暫存 {draftInboxItems.length} 筆）
+              </div>
+              <span style={{ fontSize: '0.8rem', color: '#0c4a6e' }}>
+                💡 在手機暫存後，回到電腦開啟 Antigravity IDE 跟 AI 說：<strong>「幫我抓雲端暫存檔來分析」</strong>即可直接轉換！
+              </span>
+            </div>
+
+            {draftInboxItems.length === 0 ? (
+              <div style={{ fontSize: '0.84rem', color: '#64748b', padding: '0.35rem 0' }}>
+                目前尚無雲端暫存草稿。您可在上方錄音或上傳手寫稿照片後，點擊「☁️ 暫存語音＋手寫稿至雲端」。
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                {draftInboxItems.map((item) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      background: '#ffffff',
+                      border: '1px solid #bae6fd',
+                      borderRadius: '10px',
+                      padding: '0.65rem 0.9rem',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '0.6rem'
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: '240px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '0.74rem' }}>
+                          {item.id}
+                        </span>
+                        <strong style={{ fontSize: '0.92rem', color: '#0f172a' }}>{item.meetingTitle}</strong>
+                        <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                          （上傳人：{item.createdBy}｜{new Date(item.createdAt).toLocaleString('zh-TW')}）
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: '0.25rem' }}>
+                        🖼️ 手寫稿照片：<strong>{(item.handwrittenImages || []).length} 張</strong> ｜ 🎵 錄音檔：
+                        <strong>{item.hasAudio ? '有附帶' : '無'}</strong> ｜ 📝 語音/速記文字：
+                        <strong>{item.transcript ? `${item.transcript.slice(0, 45)}...` : '無'}</strong>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleLoadDraftInboxItem(item)}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.32rem 0.7rem', fontSize: '0.78rem', color: '#0369a1', borderColor: '#7dd3fc' }}
+                      >
+                        📂 載入至上方工作台
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDraftInboxItem(item.id)}
+                        className="btn btn-danger"
+                        style={{ padding: '0.32rem 0.6rem', fontSize: '0.78rem' }}
+                      >
+                        <Trash2 size={14} /> 刪除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {aiResult && (
