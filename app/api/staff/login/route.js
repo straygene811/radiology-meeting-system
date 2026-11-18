@@ -9,12 +9,14 @@ export async function POST(request) {
     }
 
     const q = codeOrName.trim().toLowerCase();
+    const qStripped = q.replace(/^x/, '');
     const staffList = (await db.read('staff.json')) || [];
 
     const matched = staffList.find(
       (s) =>
         s.name.toLowerCase() === q ||
         (s.code && s.code.toLowerCase() === q) ||
+        (s.code && s.code.toLowerCase().replace(/^x/, '') === qStripped) ||
         (s.id && s.id.toLowerCase() === q) ||
         s.name.replace(/\s+/g, '').toLowerCase() === q
     );

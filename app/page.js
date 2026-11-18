@@ -1151,7 +1151,7 @@ export default function HomePage() {
           <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
             <strong>💡 簡易登入說明：</strong>
             <br />
-            請直接從下方<strong>點選您的姓名</strong>，或輸入您的<strong>人事代號 / 姓名</strong>（例如：<code>x3137</code>、<code>潘俊儒</code>、<code>林宜蓁</code>、<code>吳思霈</code>）即可直接進入。
+            請直接從下方<strong>點選您的姓名</strong>，或輸入您的<strong>員工編號 / 姓名</strong>（例如：<code>3137</code>、<code>4813</code>、<code>7260</code>、<code>潘俊儒</code>、<code>林宜蓁</code>）即可直接進入。
           </div>
 
           <form onSubmit={(e) => handleStaffLogin(e)}>
@@ -1198,11 +1198,11 @@ export default function HomePage() {
             </div>
 
             <div className="form-group">
-              <label htmlFor="codeOrName">或直接輸入您的代號 / 姓名</label>
+              <label htmlFor="codeOrName">或直接輸入您的員工編號 / 姓名</label>
               <input
                 id="codeOrName"
                 type="text"
-                placeholder="例如：x3137、潘俊儒、林宜蓁、R05..."
+                placeholder="例如：3137、4813、7260、潘俊儒、林宜蓁..."
                 value={loginInput}
                 onChange={(e) => setLoginInput(e.target.value)}
               />
