@@ -3,7 +3,8 @@ import path from 'path';
 
 const CLOUD_URL = process.env.CLOUD_INBOX_URL || 'https://radiology-meeting-system.vercel.app/api/draft-inbox';
 const LOCAL_URL = 'http://localhost:3000/api/draft-inbox';
-const outDir = path.join(process.cwd(), 'data', 'ide_inbox');
+// 直接存放於專案根目錄下的中文資料夾「草稿夾」
+const outDir = path.join(process.cwd(), '草稿夾');
 
 async function fetchSource(label, url) {
   try {
@@ -14,6 +15,10 @@ async function fetchSource(label, url) {
   } catch {
     return [];
   }
+}
+
+function sanitizeFileName(str) {
+  return String(str || '').replace(/[\\/:*?"<>|]/g, '_').trim();
 }
 
 async function main() {
@@ -40,15 +45,19 @@ async function main() {
     return;
   }
 
-  console.log(`📥 共抓取到 ${merged.length} 筆暫存草稿：`);
+  console.log(`📥 共抓取到 ${merged.length} 筆暫存草稿，已存入「${outDir}」：`);
 
   for (const item of merged) {
-    const itemDir = path.join(outDir, item.id);
+    const dateStr = sanitizeFileName(item.date || (item.createdAt || '').slice(0, 10) || '未定日期');
+    const uploader = sanitizeFileName(item.createdBy || '科內紀錄人');
+    const folderName = `${dateStr}_${uploader}_${sanitizeFileName(item.id)}`;
+    const itemDir = path.join(outDir, folderName);
+
     if (!fs.existsSync(itemDir)) {
       fs.mkdirSync(itemDir, { recursive: true });
     }
 
-    // 1. 儲存文字逐字稿與元資料
+    // 1. 儲存文字逐字稿與元資料（中文檔名）
     const metaText = [
       `暫存編號: ${item.id}`,
       `來源環境: ${item._source}`,
@@ -60,32 +69,34 @@ async function main() {
       `--- 語音逐字稿 / 手寫速記文字 ---`,
       item.transcript || '（無文字稿）'
     ].join('\n');
-    const txtPath = path.join(itemDir, 'transcript.txt');
+    const txtPath = path.join(itemDir, '會議語音與速記文字.txt');
     fs.writeFileSync(txtPath, metaText, 'utf-8');
 
-    // 2. 儲存手寫稿照片
+    // 2. 儲存手寫稿照片（中文檔名）
     const savedImages = [];
     for (let i = 0; i < (item.handwrittenImages || []).length; i++) {
       const img = item.handwrittenImages[i];
       const base64 = String(img.dataUrl || '').split(',')[1] || img.base64 || '';
       if (base64) {
         const ext = (img.mimeType || '').includes('png') ? 'png' : 'jpg';
-        const imgPath = path.join(itemDir, `handwritten_${i + 1}.${ext}`);
+        const origBase = sanitizeFileName(path.parse(img.name || '').name);
+        const imgFileName = origBase ? `手寫稿_${i + 1}_${origBase}.${ext}` : `手寫稿_${i + 1}.${ext}`;
+        const imgPath = path.join(itemDir, imgFileName);
         fs.writeFileSync(imgPath, Buffer.from(base64, 'base64'));
         savedImages.push(imgPath);
       }
     }
 
-    // 3. 儲存錄音檔
+    // 3. 儲存錄音檔（中文檔名）
     let savedAudio = null;
     if (item.audioBase64) {
-      const ext = (item.audioFileName || '').split('.').pop() || 'webm';
-      const audioPath = path.join(itemDir, `voice_recording.${ext}`);
+      const ext = sanitizeFileName((item.audioFileName || '').split('.').pop() || 'webm');
+      const audioPath = path.join(itemDir, `語音錄音檔.${ext}`);
       fs.writeFileSync(audioPath, Buffer.from(item.audioBase64, 'base64'));
       savedAudio = audioPath;
     }
 
-    console.log(`\n✅ [${item.id}] (${item._source}) — ${item.meetingTitle} (上傳人: ${item.createdBy})`);
+    console.log(`\n✅ [${folderName}] (${item._source}) — ${item.meetingTitle}`);
     console.log(`   📄 文字稿路徑: ${txtPath}`);
     savedImages.forEach((p, idx) => console.log(`   🖼️ 手寫稿照片 (${idx + 1}): ${p}`));
     if (savedAudio) console.log(`   🎵 語音錄音檔: ${savedAudio}`);

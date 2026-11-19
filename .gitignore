@@ -6,3 +6,5 @@ out
 npm-debug.log*
 data/ide_inbox
 data/draft_inbox.json
+草稿夾/*
+!草稿夾/草稿夾使用說明.md
