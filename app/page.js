@@ -3287,11 +3287,11 @@ export default function HomePage() {
                             ? `✅ ${currentUser.name}，您已完成本場會議【現場出席簽到】！`
                             : `📲 ${currentUser.name}，本場會議已發起，請先點選完成【現場出席簽到】`}
                         </h3>
-                        <div style={{ fontSize: '0.84rem', color: '#047857', marginTop: '0.25rem' }}>
-                          {myCheckin
-                            ? `簽到方式：${myCheckin.method} ｜ 簽到時間：${new Date(myCheckin.checkedInAt).toLocaleString('zh-TW')}`
-                            : '點選右側按鈕即可一鍵完成現場簽到（系統將自動把您列入本場會議出席人員名單）！'}
-                        </div>
+                        {myCheckin && (
+                          <div style={{ fontSize: '0.84rem', color: '#047857', marginTop: '0.25rem' }}>
+                            {`簽到方式：${myCheckin.method} ｜ 簽到時間：${new Date(myCheckin.checkedInAt).toLocaleString('zh-TW')}`}
+                          </div>
+                        )}
                       </div>
 
                       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -3626,18 +3626,15 @@ export default function HomePage() {
                     background: '#fffbeb',
                     border: '2px dashed #f59e0b',
                     borderRadius: '14px',
-                    padding: '1.75rem 1.35rem',
+                    padding: '1.4rem 1.35rem',
                     textAlign: 'center',
                     marginBottom: '1.4rem'
                   }}
                 >
-                  <Clock size={38} color="#d97706" style={{ marginBottom: '0.5rem' }} />
-                  <h3 style={{ margin: '0 0 0.45rem 0', fontSize: '1.18rem', color: '#92400e' }}>
+                  <Clock size={34} color="#d97706" style={{ marginBottom: '0.4rem' }} />
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#92400e' }}>
                     🔒 會議紀錄內容尚未公布（待技術主任確認無誤後開放其他人員查閱）
                   </h3>
-                  <p style={{ margin: '0 auto', maxWidth: '640px', fontSize: '0.9rem', color: '#78350f', lineHeight: 1.6 }}>
-                    依科內會議標準流程：發起會議後請先於上方完成「<strong>📲 現場出席簽到</strong>」，由記錄人（<strong>{activeMeeting.recorder}</strong>）執行會議紀錄並於完成後按「結束會議」；<strong>待技術主任確認無誤按「公布」後，其他人員方能查閱完整會議紀錄內容與簽閱</strong>。
-                  </p>
                 </div>
               ) : (
                 <>
