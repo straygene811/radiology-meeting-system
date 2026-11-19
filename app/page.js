@@ -1858,6 +1858,41 @@ export default function HomePage() {
               <div style={{ lineHeight: 1.6 }}>{checkedInNames.join('、')}</div>
             </div>
           )}
+
+          {/* 右下角小連結：點選進入完整會議紀錄系統 */}
+          <div style={{ marginTop: '1.1rem', textAlign: 'right' }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedName && !currentUser) {
+                  const found = activeStaffList.find((s) => s.name === selectedName);
+                  if (found) {
+                    setCurrentUser(found);
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('rad_mtg_staff_user', JSON.stringify(found));
+                    }
+                  }
+                }
+                setCheckinMeetingId(null);
+                setActiveMeetingId(null);
+                if (typeof window !== 'undefined' && window.history?.replaceState) {
+                  window.history.replaceState({}, '', '/');
+                }
+              }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#64748b',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                padding: '0.2rem 0.3rem'
+              }}
+            >
+              進入會議紀錄系統 →
+            </button>
+          </div>
         </div>
       </div>
     );
