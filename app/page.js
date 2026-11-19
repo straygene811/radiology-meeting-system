@@ -298,6 +298,7 @@ export default function HomePage() {
             const refreshed = loadedStaff.find((s) => s.name === parsedUser.name || s.id === parsedUser.id);
             if (refreshed) {
               setCurrentUser(refreshed);
+              setSelectedDropdownStaff(refreshed.name);
             }
           } catch {}
         }
@@ -551,6 +552,51 @@ export default function HomePage() {
       }
     } catch (err) {
       alert('網路錯誤，請稍後再試');
+    } finally {
+      setSigningLoading(false);
+    }
+  };
+
+  // QR Code 專屬精簡簽到（停留在精簡簽到畫面並即時顯示「✅ 已簽到」，不跳進複雜系統首頁）
+  const handleQrMinimalCheckin = async (e) => {
+    if (e) e.preventDefault();
+    const chosenName = (selectedDropdownStaff || '').trim();
+    if (!chosenName) {
+      setLoginError('請先選取簽到人員');
+      return;
+    }
+    const member = activeStaffList.find((s) => s.name === chosenName) || {
+      id: chosenName,
+      name: chosenName,
+      title: '科內同仁'
+    };
+
+    setSigningLoading(true);
+    setLoginError('');
+    try {
+      const res = await fetch('/api/meetings/sign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingId: checkinMeetingId,
+          staffId: member.id,
+          staffName: member.name,
+          mode: 'checkin',
+          comment: '現場QR掃碼簽到'
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMeetings(data.meetings || []);
+        setCurrentUser(member);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('rad_mtg_staff_user', JSON.stringify(member));
+        }
+      } else {
+        setLoginError(data.error || '簽到失敗');
+      }
+    } catch (err) {
+      setLoginError('網路連線異常，請稍後再試');
     } finally {
       setSigningLoading(false);
     }
@@ -1648,6 +1694,170 @@ export default function HomePage() {
           <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--primary-color)' }}>
             正在載入新樓醫院影像醫學科會議整合系統...
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==================== 專屬精簡畫面：QR Code 現場掃碼簽到（僅呈現會議名稱、選取簽到人員、簽到按鈕與已簽到狀態） ====================
+  if (checkinMeetingId) {
+    const checkinTargetMtg = meetings.find((m) => m.id === checkinMeetingId) || null;
+    const selectedName = (selectedDropdownStaff || '').trim();
+    const checkinRecord =
+      selectedName && checkinTargetMtg
+        ? checkinTargetMtg.checkins?.[selectedName] || checkinTargetMtg.signatures?.[selectedName] || null
+        : null;
+    const isAlreadyCheckedIn = Boolean(checkinRecord);
+    const checkedInNames = checkinTargetMtg
+      ? Array.from(
+          new Set([
+            ...Object.keys(checkinTargetMtg.checkins || {}),
+            ...Object.keys(checkinTargetMtg.signatures || {})
+          ])
+        )
+      : [];
+
+    return (
+      <div
+        className="animate-fade-in"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '94vh',
+          padding: '1rem'
+        }}
+      >
+        <div className="glass-panel" style={{ maxWidth: '440px', width: '100%', padding: '1.75rem 1.5rem' }}>
+          {/* 1. 會議名稱 */}
+          <div style={{ textAlign: 'center', marginBottom: '1.4rem' }}>
+            <span
+              className="badge"
+              style={{
+                background: '#dcfce7',
+                color: '#15803d',
+                fontSize: '0.82rem',
+                padding: '0.3rem 0.85rem',
+                marginBottom: '0.6rem'
+              }}
+            >
+              📲 會議現場簽到
+            </span>
+            <h1 style={{ fontSize: '1.35rem', color: '#0f172a', margin: '0.2rem 0 0.35rem 0', lineHeight: 1.4 }}>
+              {checkinTargetMtg ? checkinTargetMtg.title : '找不到該場會議'}
+            </h1>
+            {checkinTargetMtg && (
+              <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>
+                {checkinTargetMtg.displayDate || `${checkinTargetMtg.date} ${checkinTargetMtg.time}`}
+              </div>
+            )}
+          </div>
+
+          {checkinTargetMtg && (
+            <form onSubmit={handleQrMinimalCheckin}>
+              {/* 2. 選取簽到人員 */}
+              <div className="form-group" style={{ marginBottom: '1.15rem' }}>
+                <label style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', marginBottom: '0.45rem' }}>
+                  選取簽到人員
+                </label>
+                <select
+                  value={selectedDropdownStaff}
+                  onChange={(e) => {
+                    setSelectedDropdownStaff(e.target.value);
+                    setLoginError('');
+                  }}
+                  style={{
+                    fontSize: '1.02rem',
+                    fontWeight: 700,
+                    padding: '0.75rem 0.9rem',
+                    borderRadius: '10px',
+                    border: '2px solid #2563eb'
+                  }}
+                >
+                  <option value="">-- 請選擇您的姓名 --</option>
+                  {activeStaffList.map((s) => {
+                    const done = Boolean(
+                      checkinTargetMtg.checkins?.[s.name] || checkinTargetMtg.signatures?.[s.name]
+                    );
+                    return (
+                      <option key={s.id} value={s.name}>
+                        {s.name}（{s.title}）{done ? ' ✓ 已簽到' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {loginError && (
+                <div className="alert alert-error" style={{ marginBottom: '1rem', fontSize: '0.88rem' }}>
+                  {loginError}
+                </div>
+              )}
+
+              {/* 3. 簽到的按鈕 */}
+              <button
+                type="submit"
+                disabled={signingLoading || !selectedName || isAlreadyCheckedIn}
+                className="btn"
+                style={{
+                  width: '100%',
+                  padding: '0.9rem',
+                  fontSize: '1.08rem',
+                  fontWeight: 800,
+                  borderRadius: '12px',
+                  background: isAlreadyCheckedIn ? '#16a34a' : '#2563eb',
+                  opacity: !selectedName ? 0.6 : 1
+                }}
+              >
+                {signingLoading
+                  ? '簽到處理中...'
+                  : isAlreadyCheckedIn
+                  ? `✅ ${selectedName} 已簽到`
+                  : '📲 簽到'}
+              </button>
+            </form>
+          )}
+
+          {/* 4. 顯示已簽到狀態 */}
+          {isAlreadyCheckedIn && (
+            <div
+              className="animate-fade-in"
+              style={{
+                marginTop: '1.15rem',
+                padding: '1rem',
+                borderRadius: '12px',
+                background: '#ecfdf5',
+                border: '2px solid #10b981',
+                textAlign: 'center'
+              }}
+            >
+              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#065f46' }}>
+                ✅ {selectedName} 已完成簽到
+              </div>
+              {(checkinRecord?.checkedInAt || checkinRecord?.signedAt) && (
+                <div style={{ fontSize: '0.82rem', color: '#047857', marginTop: '0.25rem' }}>
+                  簽到時間：{new Date(checkinRecord.checkedInAt || checkinRecord.signedAt).toLocaleString('zh-TW')}
+                </div>
+              )}
+            </div>
+          )}
+
+          {checkedInNames.length > 0 && (
+            <div
+              style={{
+                marginTop: '1.15rem',
+                paddingTop: '0.9rem',
+                borderTop: '1px solid #e2e8f0',
+                fontSize: '0.84rem',
+                color: '#334155'
+              }}
+            >
+              <div style={{ fontWeight: 700, color: '#065f46', marginBottom: '0.35rem' }}>
+                ✅ 已簽到人員（{checkedInNames.length} 人）：
+              </div>
+              <div style={{ lineHeight: 1.6 }}>{checkedInNames.join('、')}</div>
+            </div>
+          )}
         </div>
       </div>
     );
