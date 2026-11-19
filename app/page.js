@@ -3227,7 +3227,7 @@ export default function HomePage() {
             <div className="card" style={{ marginBottom: '1.15rem', background: '#faf5ff', borderColor: '#d8b4fe' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.6rem' }}>
                 <div style={{ fontWeight: 700, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Mic size={18} /> 🎙️ 手機／電腦語音轉文字、錄音檔 ＆ 📷 手寫稿智慧潤飾
+                  <Mic size={18} /> 🎙️ 語音轉譯、錄製語音檔 ＆ 📷 手寫稿智慧潤飾
                 </div>
                 <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
                   <button
@@ -3242,11 +3242,11 @@ export default function HomePage() {
                   >
                     {isVoiceListening ? (
                       <>
-                        <MicOff size={15} /> 🔴 語音收音作用中 ({voiceTimerSeconds}秒) — 點此停止
+                        <MicOff size={15} /> 🔴 停止語音轉譯 ({voiceTimerSeconds}秒)
                       </>
                     ) : (
                       <>
-                        <Mic size={15} /> 1. 開始麥克風語音轉文字
+                        <Mic size={15} /> PC 語音轉譯
                       </>
                     )}
                   </button>
@@ -3264,7 +3264,7 @@ export default function HomePage() {
                     }}
                     title="iPhone / Android / LINE 瀏覽器最推薦：點擊後直接按手機鍵盤右下角的 🎤 麥克風說話"
                   >
-                    ⌨️ {voiceStatus === 'keyboard_mode' ? '🟢 手機鍵盤語音模式作用中' : '手機鍵盤「🎤語音輸入」(LINE/iOS最準)'}
+                    📱 {voiceStatus === 'keyboard_mode' ? '🟢 手機語音轉譯作用中' : '手機語音轉譯'}
                   </button>
                   <button
                     type="button"
@@ -3278,28 +3278,8 @@ export default function HomePage() {
                       borderColor: isFrontendAudioRecording ? '#dc2626' : '#cbd5e1'
                     }}
                   >
-                    {isFrontendAudioRecording ? `⏹️ 正在錄音作用中 (${frontendAudioSeconds}秒)` : '🎵 錄製語音檔'}
+                    {isFrontendAudioRecording ? `⏹️ 停止錄音 (${frontendAudioSeconds}秒)` : '🎵 錄製語音檔'}
                   </button>
-                  <label
-                    className="btn btn-secondary"
-                    style={{
-                      margin: 0,
-                      cursor: 'pointer',
-                      padding: '0.38rem 0.8rem',
-                      fontSize: '0.82rem',
-                      background: '#f5f3ff',
-                      color: '#6d28d9',
-                      borderColor: '#c4b5fd'
-                    }}
-                  >
-                    <Upload size={14} /> 📂 選取手機錄音檔{frontendAudioName ? ' (已載入)' : ''}
-                    <input
-                      type="file"
-                      accept="audio/*,.mp3,.m4a,.wav,.webm,.aac"
-                      onChange={handleFrontendAudioFileUpload}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
                   <label
                     className="btn btn-secondary"
                     style={{
@@ -3312,7 +3292,7 @@ export default function HomePage() {
                       borderColor: '#93c5fd'
                     }}
                   >
-                    <Upload size={14} /> 📷 上傳手寫稿照片{frontendHandwrittenImages.length > 0 ? ` (${frontendHandwrittenImages.length})` : ''}
+                    <Upload size={14} /> 📷 上傳手寫稿{frontendHandwrittenImages.length > 0 ? ` (${frontendHandwrittenImages.length})` : ''}
                     <input
                       type="file"
                       accept="image/*"
@@ -3334,7 +3314,7 @@ export default function HomePage() {
                       borderColor: '#6ee7b7'
                     }}
                   >
-                    🪄 {polishingVoice ? '校正潤飾中...' : '2. 智慧修正錯別字與手寫潤飾'}
+                    🪄 {polishingVoice ? '校正中...' : '智慧修正潤飾'}
                   </button>
                   <button
                     type="button"
@@ -3343,7 +3323,7 @@ export default function HomePage() {
                     className="btn btn-purple"
                     style={{ padding: '0.38rem 0.9rem', fontSize: '0.82rem' }}
                   >
-                    <Sparkles size={15} /> {aiStructuringLoading ? '轉換中...' : '3. ✨ 一鍵轉成正式議程與決議'}
+                    <Sparkles size={15} /> {aiStructuringLoading ? '轉換中...' : '轉成正式紀錄'}
                   </button>
                   <button
                     type="button"
@@ -3357,7 +3337,7 @@ export default function HomePage() {
                       color: '#ffffff'
                     }}
                   >
-                    ☁️ {savingFrontendDraftInbox ? '雲端暫存中...' : '暫存至雲端（回電腦用 IDE 整理）'}
+                    ☁️ {savingFrontendDraftInbox ? '暫存中...' : '暫存至雲端'}
                   </button>
                 </div>
               </div>
@@ -3404,26 +3384,26 @@ export default function HomePage() {
                 <div>
                   {isFrontendAudioRecording ? (
                     <>
-                      🔴 <strong>語音狀態：【正在錄製手機語音檔（已錄 {frontendAudioSeconds} 秒）】</strong> — 請對著手機說話，錄完點上方「⏹️ 正在錄音作用中」停止！
+                      🔴 <strong>語音狀態：【正在錄製語音檔（已錄 {frontendAudioSeconds} 秒）】</strong> — 請直接說話，錄完點上方「⏹️ 停止錄音」即可！
                     </>
                   ) : isVoiceListening ? (
                     <>
-                      🔴 <strong>語音狀態：【麥克風收音作用中（已啟動 {voiceTimerSeconds} 秒）】</strong> — 請直接說話！即時聽寫：
+                      🔴 <strong>語音狀態：【PC 語音轉譯作用中（已啟動 {voiceTimerSeconds} 秒）】</strong> — 請直接說話！即時聽寫：
                       <span style={{ color: '#0f172a', marginLeft: '0.3rem', textDecoration: 'underline' }}>
                         {voiceInterimText || '正在聆聽您的聲音...'}
                       </span>
                     </>
                   ) : voiceStatus === 'keyboard_mode' ? (
                     <>
-                      🟢 <strong>語音狀態：【手機鍵盤「🎤語音輸入」模式作用中】</strong> — 下方輸入框已開啟，請直接點擊您<strong>手機鍵盤右下角的「🎤 麥克風」</strong>說話！
+                      🟢 <strong>語音狀態：【手機語音轉譯作用中】</strong> — 下方輸入框已開啟，請直接點擊您<strong>手機鍵盤右下角的「🎤 麥克風」</strong>說話！
                     </>
                   ) : voiceStatus === 'paused' ? (
                     <>
-                      ⏸️ <strong>語音狀態：【手機偵測到停頓已暫停收音】</strong> — 前段文字已保留，可點右側按鈕繼續說下一句，或改用手機鍵盤 🎤 語音輸入！
+                      ⏸️ <strong>語音狀態：【偵測到停頓已暫停收音】</strong> — 前段文字已保留，可點右側按鈕繼續說下一句，或改點「📱 手機語音轉譯」！
                     </>
                   ) : (
                     <>
-                      ⚪ <strong>語音狀態：待命（尚未啟動）</strong> — 點選上方「1. 開始麥克風語音轉文字」或「⌨️ 手機鍵盤🎤語音輸入」即可開始說話
+                      ⚪ <strong>語音狀態：待命（尚未啟動）</strong> — 點選上方「PC 語音轉譯」、「📱 手機語音轉譯」或「🎵 錄製語音檔」即可開始
                     </>
                   )}
                 </div>
@@ -3591,7 +3571,7 @@ export default function HomePage() {
                   setVoiceQuickText(e.target.value);
                   latestVoiceTextRef.current = e.target.value;
                 }}
-                placeholder="點擊「1. 開始麥克風語音轉文字」或「⌨️ 手機鍵盤🎤語音輸入」直接說話，講完可點「2. 🪄 智慧修正錯別字與手寫潤飾」（自動修正如：林怡貞➔林宜蓁、評保➔品保、千屏風➔鉛屏風），也可以直接在這裡手動修改任何字句！"
+                placeholder="點選「PC 語音轉譯」或「📱 手機語音轉譯」直接說話，講完可點「🪄 智慧修正潤飾」（自動修正如：林怡貞➔林宜蓁、評保➔品保、千屏風➔鉛屏風），也可以直接在這裡手動修改任何字句！"
                 style={{
                   fontSize: '0.9rem',
                   border:

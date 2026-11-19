@@ -3679,20 +3679,20 @@ export default function AdminDashboardPage() {
           >
             <div className="card" style={{ background: isRecording ? '#fef2f2' : '#f8fafc', borderColor: isRecording ? '#f87171' : '#cbd5e1' }}>
               <div style={{ fontWeight: 700, fontSize: '0.96rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Mic size={18} color={isRecording ? '#dc2626' : '#2563eb'} /> 方式 A：現場即時麥克風錄音轉文字（免金鑰）
+                <Mic size={18} color={isRecording ? '#dc2626' : '#2563eb'} /> 方式 A：PC 語音轉譯 ／ 手機語音轉譯
               </div>
               <div style={{ fontSize: '0.83rem', color: '#64748b', marginBottom: '0.85rem' }}>
-                開會時將手機或筆電放於桌面，點擊開始錄音即可即時辨識繁體中文並轉出逐字稿。
+                電腦端可點「PC 語音轉譯」即時聽寫；手機端建議點「📱 手機語音轉譯」呼出鍵盤麥克風。
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
                 {!isRecording ? (
-                  <button type="button" onClick={startVoiceRecording} className="btn" style={{ background: '#dc2626' }}>
-                    <Mic size={17} /> 開始現場即時錄音辨識
+                  <button type="button" onClick={startVoiceRecording} className="btn" style={{ background: '#2563eb' }}>
+                    <Mic size={17} /> PC 語音轉譯
                   </button>
                 ) : (
                   <button type="button" onClick={() => stopVoiceRecording(true)} className="btn recording-pulse" style={{ background: '#991b1b' }}>
-                    <MicOff size={17} /> 停止錄音並自動修正詞句 ({recordingSeconds} 秒)
+                    <MicOff size={17} /> 🔴 停止語音轉譯 ({recordingSeconds} 秒)
                   </button>
                 )}
 
@@ -3705,10 +3705,11 @@ export default function AdminDashboardPage() {
                     padding: '0.45rem 0.75rem',
                     background: '#fffbeb',
                     color: '#b45309',
-                    borderColor: '#fcd34d'
+                    borderColor: '#fcd34d',
+                    fontWeight: 700
                   }}
                 >
-                  ⌨️ 手機鍵盤「🎤語音輸入」(LINE/iOS最準)
+                  📱 手機語音轉譯
                 </button>
 
                 {recordedAudioUrl && (
@@ -3726,15 +3727,15 @@ export default function AdminDashboardPage() {
 
             <div className="card" style={{ background: '#f8fafc' }}>
               <div style={{ fontWeight: 700, fontSize: '0.96rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <FileAudio size={18} color="#7c3aed" /> 方式 B：上傳手機錄音檔 (.mp3 / .m4a / .wav)
+                <FileAudio size={18} color="#7c3aed" /> 方式 B：錄製語音檔 ／ 上傳錄音檔 (.mp3 / .m4a / .wav)
               </div>
               <div style={{ fontSize: '0.83rem', color: '#64748b', marginBottom: '0.85rem' }}>
-                支援將手機錄音筆檔案上傳，透過 Gemini 多模態模型直接聽寫並整理成會議紀錄。
+                支援錄製或上傳手機錄音檔，透過多模態模型直接聽寫並整理成會議紀錄。
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
                 <label className="btn btn-purple" style={{ margin: 0, cursor: 'pointer' }}>
-                  <Upload size={16} /> 選擇手機錄音檔上傳
+                  <Upload size={16} /> 🎵 錄製 ／ 選擇語音檔
                   <input
                     type="file"
                     accept="audio/*,.mp3,.m4a,.wav,.webm"
@@ -3951,22 +3952,22 @@ export default function AdminDashboardPage() {
             <div>
               {isRecording ? (
                 <>
-                  🔴 <strong>語音狀態：【麥克風收音作用中（已啟動 {recordingSeconds} 秒）】</strong> — 請直接對著麥克風說話！即時聽寫：
+                  🔴 <strong>語音狀態：【PC 語音轉譯作用中（已啟動 {recordingSeconds} 秒）】</strong> — 請直接對著麥克風說話！即時聽寫：
                   <span style={{ color: '#0f172a', marginLeft: '0.4rem', textDecoration: 'underline' }}>
                     {interimTranscript || '正在聆聽您的聲音...'}
                   </span>
                 </>
               ) : adminVoiceStatus === 'keyboard_mode' ? (
                 <>
-                  🟢 <strong>語音狀態：【手機鍵盤「🎤語音輸入」模式作用中】</strong> — 下方輸入框已開啟，請直接點擊您<strong>手機鍵盤右下角的「🎤 麥克風」</strong>說話！
+                  🟢 <strong>語音狀態：【手機語音轉譯作用中】</strong> — 下方輸入框已開啟，請直接點擊您<strong>手機鍵盤右下角的「🎤 麥克風」</strong>說話！
                 </>
               ) : adminVoiceStatus === 'paused' ? (
                 <>
-                  ⏸️ <strong>語音狀態：【手機偵測到停頓已暫停收音】</strong> — 前段文字已保留，可點右側按鈕繼續說下一句，或改用手機鍵盤 🎤 語音輸入！
+                  ⏸️ <strong>語音狀態：【偵測到停頓已暫停收音】</strong> — 前段文字已保留，可點右側按鈕繼續說下一句，或改點「📱 手機語音轉譯」！
                 </>
               ) : (
                 <>
-                  ⚪ <strong>語音狀態：待命（尚未啟動）</strong> — 點選上方「開始現場即時錄音辨識」或「⌨️ 手機鍵盤🎤語音輸入」即可開始說話
+                  ⚪ <strong>語音狀態：待命（尚未啟動）</strong> — 點選上方「PC 語音轉譯」、「📱 手機語音轉譯」或「🎵 錄製 ／ 選擇語音檔」即可開始
                 </>
               )}
             </div>
