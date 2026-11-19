@@ -35,19 +35,53 @@ import {
 } from 'lucide-react';
 import { generateMeetingDocxBlob } from '@/lib/exportDocx';
 
-// 關鍵字高亮元件：用於歷史紀錄專區搜尋會議內容時醒目提示
+// 將搜尋關鍵字轉為容許中英文之間有無空白之正規表達式（例如輸入「ACR假體」可同時命中「ACR 假體」與「ACR假體」）
+function buildFlexibleKeywordRegex(rawKeyword, flags = 'gi') {
+  const tokens = String(rawKeyword || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0) return null;
+  const patterns = tokens.map((t) =>
+    t
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/([a-zA-Z0-9])([\u4e00-\u9fa5])/g, '$1\\s*$2')
+      .replace(/([\u4e00-\u9fa5])([a-zA-Z0-9])/g, '$1\\s*$2')
+  );
+  return new RegExp(`(${patterns.join('|')})`, flags);
+}
+
+function matchesAllKeywords(text, rawKeyword) {
+  const tokens = String(rawKeyword || '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
+  const lower = String(text || '').toLowerCase();
+  const noSpace = lower.replace(/\s+/g, '');
+  return tokens.every((t) => lower.includes(t) || noSpace.includes(t));
+}
+
+function matchesAnyKeyword(text, rawKeyword) {
+  const regex = buildFlexibleKeywordRegex(rawKeyword, 'i');
+  if (!regex) return false;
+  return regex.test(String(text || ''));
+}
+
+// 關鍵字高亮元件：支援單一、多重關鍵字及中英夾雜自動忽略空白差異醒目提示
 function HighlightText({ text, keyword }) {
   const str = String(text || '');
-  const kw = (keyword || '').trim();
-  if (!kw) return <>{str}</>;
+  const regex = buildFlexibleKeywordRegex(keyword, 'gi');
+  if (!regex) return <>{str}</>;
 
   try {
-    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const parts = str.split(new RegExp(`(${escaped})`, 'gi'));
+    const parts = str.split(regex);
+    const testRegex = buildFlexibleKeywordRegex(keyword, 'i');
     return (
       <>
         {parts.map((part, i) =>
-          part.toLowerCase() === kw.toLowerCase() ? (
+          part && testRegex && testRegex.test(part) ? (
             <mark
               key={i}
               style={{
@@ -1048,18 +1082,49 @@ export default function HomePage() {
     }
   };
 
-  // 提取某場會議中含有關鍵字的摘要句子（供歷史專區搜尋結果顯示）
-  const getSearchMatchSnippet = (m, kw) => {
-    const q = (kw || '').trim().toLowerCase();
-    if (!q) return null;
-    const allTexts = [
-      ...(m.agendaItems || []),
-      ...(m.discussionSections || []).flatMap((s) => [s.heading, ...(s.bullets || [])]),
-      ...(m.resolutions || []),
-      ...(m.actionItems || []).map((a) => `${a.assignee}: ${a.task}`)
+  // 提取某場會議中含有關鍵字的所有命中段落明細（標註命中位置如 [議程]、[討論內容]、[決議事項]、[待辦事項] 等）
+  const getMeetingSearchMatches = (m, kw) => {
+    const tokens = String(kw || '')
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (tokens.length === 0) return [];
+
+    const candidates = [
+      { section: '會議資訊', text: `${m.displayDate || m.date || ''} ｜ 地點：${m.location || ''} ｜ 主席：${m.chair || ''} ｜ 紀錄：${m.recorder || ''}` },
+      ...(m.agendaItems || []).map((a) => ({ section: '議程', text: String(a || '') })),
+      ...(m.discussionSections || []).flatMap((s) => [
+        { section: '討論標題', text: String(s.heading || '') },
+        ...(s.bullets || []).map((b) => ({ section: '討論內容', text: String(b || '') }))
+      ]),
+      ...(m.resolutions || []).map((r) => ({ section: '決議事項', text: String(r || '') })),
+      ...(m.actionItems || []).map((a) => ({
+        section: '待辦追蹤',
+        text: `${a.assignee || ''}：${a.task || ''}（期限：${a.dueDate || '未定'}｜${a.status || ''}）`
+      })),
+      ...(m.attachments || []).map((att) => ({
+        section: '會議附件',
+        text: `${att.title || ''} (${att.fileName || att.category || ''})`
+      })),
+      {
+        section: '出席與請假名單',
+        text: `出席：${(m.presentStaffNames || []).join('、')}${
+          (m.leaveStaffNames || []).length ? ` ｜ 請假/值班：${(m.leaveStaffNames || []).join('、')}` : ''
+        }`
+      }
     ];
-    const hit = allTexts.find((t) => String(t || '').toLowerCase().includes(q));
-    return hit || null;
+
+    if (m.rawTranscript) {
+      candidates.push({ section: '語音/手寫逐字稿', text: String(m.rawTranscript) });
+    }
+
+    return candidates.filter((c) => matchesAnyKeyword(c.text, kw));
+  };
+
+  const getSearchMatchSnippet = (m, kw) => {
+    const matches = getMeetingSearchMatches(m, kw);
+    return matches.length > 0 ? `[${matches[0].section}] ${matches[0].text}` : null;
   };
 
   // 分流計算：首頁（待簽閱） vs 歷史紀錄專區（已簽核或已歸檔）
@@ -1099,28 +1164,40 @@ export default function HomePage() {
     }
   };
 
-  // 根據當前所在的專區 (`home` 或 `history`) 進行種類、年度與全文關鍵字過濾，並依點擊表頭排序
-  const baseZoneMeetings = activeZone === 'home' ? homePendingMeetings : historyMeetingsAll;
+  // 根據當前所在的專區 (`home` 或 `history`) 進行過濾；若使用者輸入搜尋關鍵字，自動跨全庫（含所有歷史會議紀錄）進行檢索！
+  const isSearchingKeyword = Boolean(searchQuery.trim());
+  const baseZoneMeetings = isSearchingKeyword
+    ? meetings
+    : activeZone === 'home'
+    ? homePendingMeetings
+    : historyMeetingsAll;
 
   const visibleMeetings = baseZoneMeetings
     .filter((m) => {
       if (categoryFilter !== 'ALL' && m.category !== categoryFilter) {
         return false;
       }
-      if (activeZone === 'history' && yearFilter !== 'ALL' && getRocYear(m) !== yearFilter) {
+      if ((activeZone === 'history' || isSearchingKeyword) && yearFilter !== 'ALL' && getRocYear(m) !== yearFilter) {
         return false;
       }
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        const inTitle = (m.title || '').toLowerCase().includes(q);
-        const inChair = (m.chair || '').toLowerCase().includes(q);
-        const inRecorder = (m.recorder || '').toLowerCase().includes(q);
-        const inAgenda = JSON.stringify(m.agendaItems || []).toLowerCase().includes(q);
-        const inDiscussion = JSON.stringify(m.discussionSections || []).toLowerCase().includes(q);
-        const inResolutions = JSON.stringify(m.resolutions || []).toLowerCase().includes(q);
-        const inActions = JSON.stringify(m.actionItems || []).toLowerCase().includes(q);
-        const inPresent = JSON.stringify(m.presentStaffNames || []).toLowerCase().includes(q);
-        return inTitle || inChair || inRecorder || inAgenda || inDiscussion || inResolutions || inActions || inPresent;
+      if (isSearchingKeyword) {
+        const fullCorpus = [
+          m.title || '',
+          m.date || '',
+          m.displayDate || '',
+          m.location || '',
+          m.chair || '',
+          m.recorder || '',
+          JSON.stringify(m.agendaItems || []),
+          JSON.stringify(m.discussionSections || []),
+          JSON.stringify(m.resolutions || []),
+          JSON.stringify(m.actionItems || []),
+          JSON.stringify(m.presentStaffNames || []),
+          JSON.stringify(m.leaveStaffNames || []),
+          JSON.stringify((m.attachments || []).map((a) => `${a.title} ${a.fileName || ''}`)),
+          m.rawTranscript || ''
+        ].join(' ');
+        return matchesAllKeywords(fullCorpus, searchQuery);
       }
       return true;
     })
@@ -1772,18 +1849,22 @@ export default function HomePage() {
           })}
         </div>
 
-        {/* 2. 會議紀錄內容全文搜尋框 */}
+        {/* 2. 歷史與全庫會議紀錄內容全文搜尋框 */}
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: 1, minWidth: '250px' }}>
             <input
               type="text"
-              placeholder="🔍 搜尋會議紀錄內容（可輸入標題、討論內文關鍵字如 EPA、ACR假體、換管球、GE高階CT、吳思霈、實習生...）"
+              placeholder="🔍 搜尋歷史會議紀錄關鍵字（支援多關鍵字空白分隔，如：EPA、ACR假體、換管球、GE高階CT、乳房攝影、實習生...）"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (activeMeetingId) setActiveMeetingId(null);
+              }}
               style={{
                 paddingLeft: '1rem',
                 fontSize: '0.92rem',
-                border: searchQuery.trim() ? '2px solid #7c3aed' : '1px solid #cbd5e1'
+                border: searchQuery.trim() ? '2px solid #7c3aed' : '1px solid #cbd5e1',
+                background: searchQuery.trim() ? '#faf5ff' : '#ffffff'
               }}
             />
           </div>
@@ -1794,22 +1875,52 @@ export default function HomePage() {
               className="btn btn-secondary"
               style={{ padding: '0.6rem 0.95rem', fontSize: '0.85rem' }}
             >
-              清除搜尋
+              ✕ 清除搜尋
             </button>
           )}
+        </div>
+
+        {/* 常用歷史關鍵字快速點選標籤 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b' }}>🔥 常用歷史關鍵字快速查找：</span>
+          {['EPA', 'ACR假體', '換管球', 'GE高階CT', '乳房攝影', '輻射防護', '實習生', '品保', '當責 Q10'].map((kw) => {
+            const activeKw = searchQuery.trim().toLowerCase() === kw.toLowerCase();
+            return (
+              <button
+                key={kw}
+                type="button"
+                onClick={() => {
+                  setSearchQuery(activeKw ? '' : kw);
+                  setActiveMeetingId(null);
+                }}
+                style={{
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '999px',
+                  fontSize: '0.76rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  border: activeKw ? '1px solid #7c3aed' : '1px solid #cbd5e1',
+                  background: activeKw ? '#7c3aed' : '#f8fafc',
+                  color: activeKw ? '#ffffff' : '#475569'
+                }}
+              >
+                #{kw}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* ==================== 乾淨的「會議清單模式」 vs 點進去才顯示的「會議紀錄內容模式」 ==================== */}
       {!activeMeeting ? (
-        activeZone === 'home' && homePendingMeetings.length === 0 ? (
+        activeZone === 'home' && homePendingMeetings.length === 0 && !isSearchingKeyword ? (
           <div className="glass-panel animate-fade-in" style={{ textAlign: 'center', padding: '3rem 1.5rem' }}>
             <CheckCircle2 size={54} color="#059669" style={{ marginBottom: '0.75rem' }} />
             <h2 style={{ fontSize: '1.45rem', color: '#065f46', marginBottom: '0.5rem' }}>
               🎉 太棒了！{currentUser.name}，您目前已無任何待簽閱的會議紀錄！
             </h2>
             <p className="subtitle" style={{ maxWidth: '560px', margin: '0 auto 1.4rem auto' }}>
-              所有您已簽認過的會議紀錄以及歷年歸檔會議（共 <strong>{historyMeetingsAll.length}</strong> 筆），皆已自動收納於「<strong>📚 歷史紀錄專區</strong>」，不會佔用您的首頁版面。
+              所有您已簽認過的會議紀錄以及歷年歸檔會議（共 <strong>{historyMeetingsAll.length}</strong> 筆），皆已自動收納於「<strong>📚 歷史紀錄專區</strong>」，您也可以直接在上方搜尋框輸入關鍵字查找任何一份歷史會議紀錄！
             </p>
             <div style={{ display: 'flex', gap: '0.65rem', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
@@ -1831,11 +1942,13 @@ export default function HomePage() {
             </div>
           </div>
         ) : (
-          /* 首頁／歷史專區以極簡列表呈現（僅顯示：分類、標題、時間），點選整列即可開啟完整會議紀錄 */
+          /* 首頁／歷史專區／關鍵字檢索結果列表，點選整列即可開啟完整會議紀錄 */
           <div className="no-print animate-fade-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem', padding: '0 0.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div style={{ fontSize: '0.94rem', fontWeight: 700, color: '#334155' }}>
-                {activeZone === 'home'
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: isSearchingKeyword ? '#5b21b6' : '#334155' }}>
+                {isSearchingKeyword
+                  ? `🔍 歷史與全庫會議關鍵字「${searchQuery}」搜尋結果（共找到 ${visibleMeetings.length} 份會議紀錄，點選即可開啟該份紀錄）：`
+                  : activeZone === 'home'
                   ? `✍️ 待您簽閱的會議清單（共 ${visibleMeetings.length} 筆，點選列即可開啟）：`
                   : `📚 歷史紀錄專區列表（共 ${visibleMeetings.length} 筆，點選列即可開啟會議紀錄）：`}
               </div>
@@ -1843,13 +1956,13 @@ export default function HomePage() {
 
             {visibleMeetings.length === 0 ? (
               <div className="card" style={{ textAlign: 'center', color: '#64748b', padding: '2.5rem' }}>
-                沒有符合「{searchQuery || '目前分類'}」的會議紀錄
+                找不到含有關鍵字「<strong>{searchQuery || '目前分類'}</strong>」的會議紀錄，請嘗試其他關鍵字或點擊「清除搜尋」
               </div>
             ) : (
               <div
                 style={{
                   background: '#ffffff',
-                  border: '1px solid #cbd5e1',
+                  border: isSearchingKeyword ? '2px solid #a855f7' : '1px solid #cbd5e1',
                   borderRadius: '14px',
                   overflow: 'hidden',
                   boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
@@ -1860,7 +1973,7 @@ export default function HomePage() {
                   className="meeting-list-grid meeting-list-header-mobile-hide"
                   style={{
                     padding: '0.75rem 1.2rem',
-                    background: '#f8fafc',
+                    background: isSearchingKeyword ? '#faf5ff' : '#f8fafc',
                     borderBottom: '1px solid #cbd5e1',
                     fontSize: '0.84rem',
                     fontWeight: 700,
@@ -1883,7 +1996,7 @@ export default function HomePage() {
                     style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
                     title="點擊依會議標題排序"
                   >
-                    會議紀錄標題
+                    會議紀錄標題 {isSearchingKeyword && '（含關鍵字命中段落明細）'}
                     <span style={{ color: listSortBy === 'title' ? '#2563eb' : '#94a3b8', fontSize: '0.78rem' }}>
                       {listSortBy === 'title' ? (listSortDir === 'asc' ? '▲' : '▼') : '⇅'}
                     </span>
@@ -1910,10 +2023,10 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                {/* 列表每一列（分類、標題、已簽核/未簽核顏色與數字、時間） */}
+                {/* 列表每一列（分類、標題與關鍵字命中段落明細、已簽核/未簽核顏色與數字、時間） */}
                 {visibleMeetings.map((m, idx) => {
                   const cat = getCategoryBadge(m.category);
-                  const snippet = searchQuery.trim() ? getSearchMatchSnippet(m, searchQuery) : null;
+                  const searchMatches = isSearchingKeyword ? getMeetingSearchMatches(m, searchQuery) : [];
                   const signedMap = m.signatures || {};
                   const isSignedByMe = Boolean(currentUser && signedMap[currentUser.name]);
                   const signedCount = Object.keys(signedMap).length;
@@ -1950,7 +2063,7 @@ export default function HomePage() {
                       }}
                     >
                       {/* 1. 分類 */}
-                      <div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
                         <span
                           className="badge"
                           style={{
@@ -1962,9 +2075,14 @@ export default function HomePage() {
                         >
                           {cat.shortName || cat.name}
                         </span>
+                        {isSearchingKeyword && (
+                          <span style={{ fontSize: '0.73rem', color: '#64748b', fontWeight: 700, paddingLeft: '0.2rem' }}>
+                            {getRocYear(m)}年度・{m.isArchived || isSignedByMe ? '📚歷史紀錄' : '✍️待簽閱'}
+                          </span>
+                        )}
                       </div>
 
-                      {/* 2. 標題（若有搜尋關鍵字則附帶一行命中預覽） */}
+                      {/* 2. 標題（若有搜尋關鍵字則附帶所有命中段落明細預覽） */}
                       <div style={{ minWidth: 0 }}>
                         <div
                           style={{
@@ -1990,20 +2108,60 @@ export default function HomePage() {
                             title={isSignedByMe ? '您已簽核' : '您尚未簽核'}
                           />
                           <HighlightText text={m.title} keyword={searchQuery} />
+                          {isSearchingKeyword && searchMatches.length > 0 && (
+                            <span
+                              className="badge"
+                              style={{
+                                background: '#ede9fe',
+                                color: '#5b21b6',
+                                fontSize: '0.72rem',
+                                padding: '0.12rem 0.48rem'
+                              }}
+                            >
+                              🎯 命中 {searchMatches.length} 處內文
+                            </span>
+                          )}
                         </div>
-                        {snippet && (
+                        {isSearchingKeyword && searchMatches.length > 0 && (
                           <div
                             style={{
-                              marginTop: '0.3rem',
-                              fontSize: '0.78rem',
-                              color: '#854d0e',
-                              background: '#fefce8',
-                              padding: '0.2rem 0.5rem',
-                              borderRadius: '6px',
-                              display: 'inline-block'
+                              marginTop: '0.4rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.25rem'
                             }}
                           >
-                            🔍 <HighlightText text={snippet} keyword={searchQuery} />
+                            {searchMatches.slice(0, 4).map((hit, hIdx) => (
+                              <div
+                                key={hIdx}
+                                style={{
+                                  fontSize: '0.8rem',
+                                  color: '#334155',
+                                  background: '#fefce8',
+                                  border: '1px solid #fef08a',
+                                  padding: '0.26rem 0.55rem',
+                                  borderRadius: '6px',
+                                  lineHeight: 1.45
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontWeight: 800,
+                                    color: '#7c3aed',
+                                    marginRight: '0.35rem',
+                                    fontSize: '0.75rem'
+                                  }}
+                                >
+                                  [{hit.section}]
+                                </span>
+                                <HighlightText text={hit.text} keyword={searchQuery} />
+                              </div>
+                            ))}
+                            {searchMatches.length > 4 && (
+                              <div style={{ fontSize: '0.75rem', color: '#6d28d9', fontWeight: 600, paddingLeft: '0.2rem' }}>
+                                ＋ 還有 {searchMatches.length - 4} 處命中內容，點擊此列開啟完整會議紀錄查看...
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

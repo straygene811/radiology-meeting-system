@@ -40,6 +40,76 @@ import {
 import { generateMeetingDocxBlob } from '@/lib/exportDocx';
 import { GOOGLE_APPS_SCRIPT_CODE } from '@/lib/googleAppsScriptTemplate';
 
+// 將搜尋關鍵字轉為容許中英文之間有無空白之正規表達式（例如輸入「ACR假體」可同時命中「ACR 假體」與「ACR假體」）
+function buildFlexibleKeywordRegex(rawKeyword, flags = 'gi') {
+  const tokens = String(rawKeyword || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0) return null;
+  const patterns = tokens.map((t) =>
+    t
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/([a-zA-Z0-9])([\u4e00-\u9fa5])/g, '$1\\s*$2')
+      .replace(/([\u4e00-\u9fa5])([a-zA-Z0-9])/g, '$1\\s*$2')
+  );
+  return new RegExp(`(${patterns.join('|')})`, flags);
+}
+
+function matchesAllKeywords(text, rawKeyword) {
+  const tokens = String(rawKeyword || '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
+  const lower = String(text || '').toLowerCase();
+  const noSpace = lower.replace(/\s+/g, '');
+  return tokens.every((t) => lower.includes(t) || noSpace.includes(t));
+}
+
+function matchesAnyKeyword(text, rawKeyword) {
+  const regex = buildFlexibleKeywordRegex(rawKeyword, 'i');
+  if (!regex) return false;
+  return regex.test(String(text || ''));
+}
+
+// 關鍵字高亮元件：支援單一、多重關鍵字及中英夾雜自動忽略空白差異醒目提示
+function HighlightText({ text, keyword }) {
+  const str = String(text || '');
+  const regex = buildFlexibleKeywordRegex(keyword, 'gi');
+  if (!regex) return <>{str}</>;
+
+  try {
+    const parts = str.split(regex);
+    const testRegex = buildFlexibleKeywordRegex(keyword, 'i');
+    return (
+      <>
+        {parts.map((part, i) =>
+          part && testRegex && testRegex.test(part) ? (
+            <mark
+              key={i}
+              style={{
+                background: '#fef08a',
+                color: '#854d0e',
+                padding: '0 3px',
+                borderRadius: '4px',
+                fontWeight: 700
+              }}
+            >
+              {part}
+            </mark>
+          ) : (
+            part
+          )
+        )}
+      </>
+    );
+  } catch {
+    return <>{str}</>;
+  }
+}
+
 const COLOR_PRESETS = [
   { label: '醫療藍', color: '#2563eb', badgeBg: '#dbeafe' },
   { label: '教學紫', color: '#7c3aed', badgeBg: '#ede9fe' },
@@ -1345,21 +1415,72 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // 提取某場會議中含有關鍵字的所有命中段落明細（標註命中位置如 [議程]、[討論內容]、[決議事項]、[待辦追蹤] 等）
+  const getAdminMeetingSearchMatches = (m, kw) => {
+    const tokens = String(kw || '')
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (tokens.length === 0) return [];
+
+    const candidates = [
+      { section: '會議資訊', text: `${m.displayDate || m.date || ''} ｜ 地點：${m.location || ''} ｜ 主席：${m.chair || ''} ｜ 紀錄：${m.recorder || ''}` },
+      ...(m.agendaItems || []).map((a) => ({ section: '議程', text: String(a || '') })),
+      ...(m.discussionSections || []).flatMap((s) => [
+        { section: '討論標題', text: String(s.heading || '') },
+        ...(s.bullets || []).map((b) => ({ section: '討論內容', text: String(b || '') }))
+      ]),
+      ...(m.resolutions || []).map((r) => ({ section: '決議事項', text: String(r || '') })),
+      ...(m.actionItems || []).map((a) => ({
+        section: '待辦追蹤',
+        text: `${a.assignee || ''}：${a.task || ''}（期限：${a.dueDate || '未定'}｜${a.status || ''}）`
+      })),
+      ...(m.attachments || []).map((att) => ({
+        section: '會議附件',
+        text: `${att.title || ''} (${att.fileName || att.category || ''})`
+      })),
+      {
+        section: '出席與請假名單',
+        text: `出席：${(m.presentStaffNames || []).join('、')}${
+          (m.leaveStaffNames || []).length ? ` ｜ 請假/值班：${(m.leaveStaffNames || []).join('、')}` : ''
+        }`
+      }
+    ];
+
+    if (m.rawTranscript) {
+      candidates.push({ section: '語音/手寫逐字稿', text: String(m.rawTranscript) });
+    }
+
+    return candidates.filter((c) => matchesAnyKeyword(c.text, kw));
+  };
+
+  const isAdminSearchingKeyword = Boolean(meetingSearchQuery.trim());
+
   const filteredAdminMeetings = meetings
     .filter((m) => {
       if (filterCat !== 'ALL' && m.category !== filterCat) return false;
       if (filterYear !== 'ALL' && getRocYear(m) !== filterYear) return false;
       if (filterArchiveMode === 'ACTIVE' && m.isArchived) return false;
       if (filterArchiveMode === 'ARCHIVED' && !m.isArchived) return false;
-      if (meetingSearchQuery.trim()) {
-        const q = meetingSearchQuery.trim().toLowerCase();
-        const inTitle = (m.title || '').toLowerCase().includes(q);
-        const inChair = (m.chair || '').toLowerCase().includes(q);
-        const inRecorder = (m.recorder || '').toLowerCase().includes(q);
-        const inAgenda = JSON.stringify(m.agendaItems || []).toLowerCase().includes(q);
-        const inDiscussion = JSON.stringify(m.discussionSections || []).toLowerCase().includes(q);
-        const inResolutions = JSON.stringify(m.resolutions || []).toLowerCase().includes(q);
-        return inTitle || inChair || inRecorder || inAgenda || inDiscussion || inResolutions;
+      if (isAdminSearchingKeyword) {
+        const fullCorpus = [
+          m.title || '',
+          m.date || '',
+          m.displayDate || '',
+          m.location || '',
+          m.chair || '',
+          m.recorder || '',
+          JSON.stringify(m.agendaItems || []),
+          JSON.stringify(m.discussionSections || []),
+          JSON.stringify(m.resolutions || []),
+          JSON.stringify(m.actionItems || []),
+          JSON.stringify(m.presentStaffNames || []),
+          JSON.stringify(m.leaveStaffNames || []),
+          JSON.stringify((m.attachments || []).map((a) => `${a.title} ${a.fileName || ''}`)),
+          m.rawTranscript || ''
+        ].join(' ');
+        return matchesAllKeywords(fullCorpus, meetingSearchQuery);
       }
       return true;
     })
@@ -2474,19 +2595,64 @@ export default function AdminDashboardPage() {
                 </div>
 
                 {/* 3. 會議紀錄內容全文搜尋框 */}
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <input
                     type="text"
-                    placeholder="🔍 搜尋會議紀錄內容（輸入關鍵字如：EPA、ACR假體、換管球、GE高階CT、吳思霈、實習生...）"
+                    placeholder="🔍 搜尋歷史會議紀錄關鍵字（支援多關鍵字空白分隔，如：EPA、ACR假體、換管球、GE高階CT、乳房攝影、實習生...）"
                     value={meetingSearchQuery}
-                    onChange={(e) => setMeetingSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                      setMeetingSearchQuery(e.target.value);
+                      if (viewingAdminMeetingId) setViewingAdminMeetingId(null);
+                    }}
+                    style={{
+                      flex: 1,
+                      minWidth: '250px',
+                      border: isAdminSearchingKeyword ? '2px solid #7c3aed' : '1px solid #cbd5e1',
+                      background: isAdminSearchingKeyword ? '#faf5ff' : '#ffffff'
+                    }}
                   />
                   {meetingSearchQuery.trim() && (
                     <button type="button" onClick={() => setMeetingSearchQuery('')} className="btn btn-secondary">
-                      清除搜尋
+                      ✕ 清除搜尋
                     </button>
                   )}
                 </div>
+
+                {/* 常用歷史關鍵字快速點選標籤 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b' }}>🔥 常用歷史關鍵字快速查找：</span>
+                  {['EPA', 'ACR假體', '換管球', 'GE高階CT', '乳房攝影', '輻射防護', '實習生', '品保', '當責 Q10'].map((kw) => {
+                    const activeKw = meetingSearchQuery.trim().toLowerCase() === kw.toLowerCase();
+                    return (
+                      <button
+                        key={kw}
+                        type="button"
+                        onClick={() => {
+                          setMeetingSearchQuery(activeKw ? '' : kw);
+                          setViewingAdminMeetingId(null);
+                        }}
+                        style={{
+                          padding: '0.2rem 0.6rem',
+                          borderRadius: '999px',
+                          fontSize: '0.76rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          border: activeKw ? '1px solid #7c3aed' : '1px solid #cbd5e1',
+                          background: activeKw ? '#7c3aed' : '#f8fafc',
+                          color: activeKw ? '#ffffff' : '#475569'
+                        }}
+                      >
+                        #{kw}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {isAdminSearchingKeyword && (
+                  <div style={{ marginTop: '0.65rem', fontSize: '0.88rem', fontWeight: 800, color: '#5b21b6' }}>
+                    🔍 歷史與全庫會議關鍵字「{meetingSearchQuery}」搜尋結果：共找到 {filteredAdminMeetings.length} 份會議紀錄（點選任一列即可展開完整內容）
+                  </div>
+                )}
               </div>
 
               {/* ==================== 維護中心：極簡列表模式 vs 點進去才顯示完整內容模式 ==================== */}
@@ -2494,7 +2660,7 @@ export default function AdminDashboardPage() {
                 <div
                   style={{
                     background: '#ffffff',
-                    border: '1px solid #cbd5e1',
+                    border: isAdminSearchingKeyword ? '2px solid #a855f7' : '1px solid #cbd5e1',
                     borderRadius: '14px',
                     overflow: 'hidden',
                     boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
@@ -2505,7 +2671,7 @@ export default function AdminDashboardPage() {
                     className="meeting-list-grid meeting-list-header-mobile-hide"
                     style={{
                       padding: '0.8rem 1.2rem',
-                      background: '#f8fafc',
+                      background: isAdminSearchingKeyword ? '#faf5ff' : '#f8fafc',
                       borderBottom: '1px solid #cbd5e1',
                       fontSize: '0.84rem',
                       fontWeight: 700,
@@ -2528,7 +2694,7 @@ export default function AdminDashboardPage() {
                       style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
                       title="點擊依會議標題排序"
                     >
-                      會議紀錄標題
+                      會議紀錄標題 {isAdminSearchingKeyword && '（含關鍵字命中段落明細）'}
                       <span style={{ color: adminSortBy === 'title' ? '#2563eb' : '#94a3b8', fontSize: '0.78rem' }}>
                         {adminSortBy === 'title' ? (adminSortDir === 'asc' ? '▲' : '▼') : '⇅'}
                       </span>
@@ -2563,6 +2729,7 @@ export default function AdminDashboardPage() {
                       color: '#1e40af'
                     };
                     const stats = getMeetingSignStats(m);
+                    const searchMatches = isAdminSearchingKeyword ? getAdminMeetingSearchMatches(m, meetingSearchQuery) : [];
 
                     return (
                       <div
@@ -2590,7 +2757,7 @@ export default function AdminDashboardPage() {
                         }}
                       >
                         {/* 1. 分類 */}
-                        <div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
                           <span
                             className="badge"
                             style={{
@@ -2602,11 +2769,59 @@ export default function AdminDashboardPage() {
                           >
                             {cat.shortName || cat.name}
                           </span>
+                          {isAdminSearchingKeyword && (
+                            <span style={{ fontSize: '0.73rem', color: '#64748b', fontWeight: 700, paddingLeft: '0.2rem' }}>
+                              {getRocYear(m)}年度・{m.isArchived ? '📚歷史歸檔' : '✍️開放中'}
+                            </span>
+                          )}
                         </div>
 
-                        {/* 2. 會議標題 */}
-                        <div style={{ minWidth: 0, fontWeight: 700, fontSize: '1rem', color: '#0f172a', lineHeight: 1.4 }}>
-                          {m.title}
+                        {/* 2. 會議標題與關鍵字命中段落明細 */}
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a', lineHeight: 1.4, display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                            <HighlightText text={m.title} keyword={meetingSearchQuery} />
+                            {isAdminSearchingKeyword && searchMatches.length > 0 && (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#ede9fe',
+                                  color: '#5b21b6',
+                                  fontSize: '0.72rem',
+                                  padding: '0.12rem 0.48rem'
+                                }}
+                              >
+                                🎯 命中 {searchMatches.length} 處內文
+                              </span>
+                            )}
+                          </div>
+                          {isAdminSearchingKeyword && searchMatches.length > 0 && (
+                            <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              {searchMatches.slice(0, 4).map((hit, hIdx) => (
+                                <div
+                                  key={hIdx}
+                                  style={{
+                                    fontSize: '0.8rem',
+                                    color: '#334155',
+                                    background: '#fefce8',
+                                    border: '1px solid #fef08a',
+                                    padding: '0.26rem 0.55rem',
+                                    borderRadius: '6px',
+                                    lineHeight: 1.45
+                                  }}
+                                >
+                                  <span style={{ fontWeight: 800, color: '#7c3aed', marginRight: '0.35rem', fontSize: '0.75rem' }}>
+                                    [{hit.section}]
+                                  </span>
+                                  <HighlightText text={hit.text} keyword={meetingSearchQuery} />
+                                </div>
+                              ))}
+                              {searchMatches.length > 4 && (
+                                <div style={{ fontSize: '0.75rem', color: '#6d28d9', fontWeight: 600, paddingLeft: '0.2rem' }}>
+                                  ＋ 還有 {searchMatches.length - 4} 處命中內容，點擊此列展開完整會議紀錄...
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         {/* 3. 已簽核 / 未簽核（僅顯示數字與顏色） */}
@@ -2862,7 +3077,9 @@ export default function AdminDashboardPage() {
                           </div>
                         ) : (
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            <h2 style={{ margin: 0, fontSize: '1.35rem', color: '#0f172a' }}>{m.title}</h2>
+                            <h2 style={{ margin: 0, fontSize: '1.35rem', color: '#0f172a' }}>
+                              <HighlightText text={m.title} keyword={meetingSearchQuery} />
+                            </h2>
                             <button
                               type="button"
                               onClick={() => {
@@ -2982,7 +3199,7 @@ export default function AdminDashboardPage() {
                           <ul style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.7 }}>
                             {m.agendaItems.map((ag, i) => (
                               <li key={i} style={{ fontWeight: 600, color: '#1e293b' }}>
-                                {ag}
+                                <HighlightText text={ag} keyword={meetingSearchQuery} />
                               </li>
                             ))}
                           </ul>
@@ -2998,10 +3215,14 @@ export default function AdminDashboardPage() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                             {m.discussionSections.map((sec, sIdx) => (
                               <div key={sIdx} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '0.85rem 1rem' }}>
-                                <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.4rem' }}>{sec.heading}</div>
+                                <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.4rem' }}>
+                                  <HighlightText text={sec.heading} keyword={meetingSearchQuery} />
+                                </div>
                                 <ul style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.65, fontSize: '0.92rem', color: '#334155' }}>
                                   {(sec.bullets || []).map((b, bIdx) => (
-                                    <li key={bIdx}>{b}</li>
+                                    <li key={bIdx}>
+                                      <HighlightText text={b} keyword={meetingSearchQuery} />
+                                    </li>
                                   ))}
                                 </ul>
                               </div>
@@ -3019,7 +3240,9 @@ export default function AdminDashboardPage() {
                           <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '10px', padding: '0.85rem 1rem' }}>
                             <ol style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.7, fontWeight: 600, color: '#064e3b' }}>
                               {m.resolutions.map((r, rIdx) => (
-                                <li key={rIdx}>{r}</li>
+                                <li key={rIdx}>
+                                  <HighlightText text={r} keyword={meetingSearchQuery} />
+                                </li>
                               ))}
                             </ol>
                           </div>
@@ -3045,8 +3268,12 @@ export default function AdminDashboardPage() {
                               <tbody>
                                 {m.actionItems.map((act, aIdx) => (
                                   <tr key={act.id || aIdx} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                                    <td style={{ padding: '0.6rem 0.8rem', fontWeight: 600 }}>{act.task}</td>
-                                    <td style={{ padding: '0.6rem 0.8rem' }}>{act.assignee}</td>
+                                    <td style={{ padding: '0.6rem 0.8rem', fontWeight: 600 }}>
+                                      <HighlightText text={act.task} keyword={meetingSearchQuery} />
+                                    </td>
+                                    <td style={{ padding: '0.6rem 0.8rem' }}>
+                                      <HighlightText text={act.assignee} keyword={meetingSearchQuery} />
+                                    </td>
                                     <td style={{ padding: '0.6rem 0.8rem' }}>{act.dueDate || '—'}</td>
                                     <td style={{ padding: '0.6rem 0.8rem' }}>
                                       <span className="badge" style={{ background: act.status === '已完成' ? '#d1fae5' : '#fef3c7', color: act.status === '已完成' ? '#065f46' : '#92400e' }}>
