@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import QRCode from 'qrcode';
 import {
   CheckCircle2,
   Clock,
@@ -132,6 +133,7 @@ export default function HomePage() {
 
   // Signature pad state
   const [showSigPad, setShowSigPad] = useState(false);
+  const [sigPadMode, setSigPadMode] = useState('sign'); // 'sign' (會後查閱簽認) | 'checkin' (會議進行中現場簽到)
   const [signComment, setSignComment] = useState('');
   const [signingLoading, setSigningLoading] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
@@ -140,14 +142,20 @@ export default function HomePage() {
   const lastPointRef = useRef({ x: 0, y: 0 });
   const [hasDrawnSignature, setHasDrawnSignature] = useState(false);
 
-  // Lightbox image preview
+  // Lightbox image preview & QR Code modal
   const [previewImage, setPreviewImage] = useState(null);
+  const [qrModalMeeting, setQrModalMeeting] = useState(null);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const [checkinUrl, setCheckinUrl] = useState('');
 
-  // 同仁前台發起會議紀錄 / 編輯會議紀錄 State
+  // 同仁前台「發起新會議 (initiate)」與「點選進入執行會議紀錄 (record)」State
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [modalMode, setModalMode] = useState('initiate'); // 'initiate' (發起會議開放簽到) | 'record' (執行會議紀錄/修改退回資料)
   const [staffDraftMeeting, setStaffDraftMeeting] = useState(null);
   const [customAttendeeInput, setCustomAttendeeInput] = useState('');
   const [savingStaffMeeting, setSavingStaffMeeting] = useState(false);
+  const [directorReviewReason, setDirectorReviewReason] = useState('');
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [voiceQuickText, setVoiceQuickText] = useState('');
   const [voiceInterimText, setVoiceInterimText] = useState('');
   const [voiceBeforePolish, setVoiceBeforePolish] = useState('');
@@ -189,7 +197,7 @@ export default function HomePage() {
 
   const showToast = (msg) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 4200);
+    setTimeout(() => setToastMsg(''), 4500);
   };
 
   const getRocYear = (m) => {
@@ -198,18 +206,61 @@ export default function HomePage() {
     return String(y > 1911 ? y - 1911 : y);
   };
 
-  // 判斷某場會議對該名同仁而言，是否屬於「首頁（待簽閱）」或「歷史紀錄專區」
-  const isMeetingPendingForUser = (m, user) => {
+  // 判斷登入者是否為「技術主任 / 主管」（可確認無誤按「公布」或「退回記錄人修改」）
+  const isTechDirectorOrSupervisor = (user) => {
     if (!user) return false;
+    if (user.role === 'chair' || user.role === 'director') return true;
+    if ((user.title || '').includes('主任')) return true;
+    if (['林宜蓁', '鄭義成', '許志賢'].includes(user.name)) return true;
+    return false;
+  };
+
+  // 判斷登入者是否為本場會議之「記錄人 / 發起人 / 主席 / 主任」（可於會議進行中或退回時執行會議紀錄與結束會議）
+  const isRecorderOrInitiator = (m, user) => {
+    if (!m || !user) return false;
+    return (
+      user.name === m.recorder ||
+      user.name === m.initiatedBy ||
+      user.name === m.chair ||
+      isTechDirectorOrSupervisor(user)
+    );
+  };
+
+  // 判斷登入者是否可查閱該場會議之完整會議紀錄內容（待技術主任確認無誤按「公布」後，其他人員才能去查閱）
+  const canViewMeetingMinutesContent = (m, user) => {
+    if (!m) return false;
+    if (m.status === 'published' || !m.status) return true;
+    return isRecorderOrInitiator(m, user) || isTechDirectorOrSupervisor(user);
+  };
+
+  // 判斷某場會議對該名同仁而言，是否顯示於「首頁」或「歷史紀錄專區」
+  const isMeetingPendingForUser = (m, user) => {
+    if (!user || !m) return false;
+    // 1. 會議進行中 (in_progress)：全員皆可在首頁看到並點選進入（同仁先做現場簽到，記錄人點選進入執行會議紀錄）
+    if (m.status === 'in_progress') {
+      return true;
+    }
+    // 2. 技術主任退回修改中 (returned)：僅記錄人 / 發起人 / 主席 / 主任在首頁看到並進入修改資料（其他人員不可查閱）
+    if (m.status === 'returned') {
+      return isRecorderOrInitiator(m, user);
+    }
+    // 3. 已結束會議・待技術主任確認公布 (pending_review / pending_chair / pending_director)：僅技術主任/主管與記錄人可見（其他人員待公布後才能查閱）
+    if (m.status === 'pending_review' || m.status === 'pending_chair' || m.status === 'pending_director') {
+      return isTechDirectorOrSupervisor(user) || isRecorderOrInitiator(m, user);
+    }
+    // 4. 技術主任已確認公布 (published)：開放全科同仁查閱與簽認
     const isSignedByMe = Boolean(m.signatures?.[user.name]);
     if (isSignedByMe) return false; // 已簽核過的就不會顯示在首頁！
     const isReopenedForMe = (m.reopenedForStaff || []).includes(user.name);
     if (isReopenedForMe) return true; // 管理員退回重簽，強制顯示於首頁
     if (m.isArchived) return false; // 已結案歸檔至歷史專區
-    return m.status === 'published';
+    return m.status === 'published' || !m.status;
   };
 
   const isMeetingInHistoryForUser = (m, user) => {
+    if (!m) return false;
+    // 尚未經技術主任確認公布的會議（in_progress / returned / pending_review），不列入歷史紀錄專區
+    if (m.status && m.status !== 'published') return false;
     if (!user) return true;
     const isSignedByMe = Boolean(m.signatures?.[user.name]);
     if (isSignedByMe) return true; // 已簽核過自動進入歷史紀錄專區
@@ -474,18 +525,27 @@ export default function HomePage() {
         setMeetings(updatedMeetings);
         setShowSigPad(false);
         setSignComment('');
-        // 【A】簽核完成後「自動返回首頁列表」
-        setActiveZone('home');
-        setActiveMeetingId(null);
         setCheckinMeetingId(null);
-        if (typeof window !== 'undefined') {
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        if (mode === 'checkin' && data.meeting?.status && data.meeting.status !== 'published') {
+          // 會議進行中 (in_progress) 現場出席簽到：保留於當前頁面或返回首頁顯示已簽到狀態
+          setActiveZone('home');
+          showToast(
+            `✅ ${user.name} 已完成【${data.meeting.title}】現場出席簽到（已自動列入出席人員名單）！`
+          );
+        } else {
+          // 【A】正式公布後之簽閱完成後「自動返回首頁列表」
+          setActiveZone('home');
+          setActiveMeetingId(null);
+          if (typeof window !== 'undefined') {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+          showToast(
+            mode === 'checkin'
+              ? `✅ ${user.name} 已完成【${data.meeting.title}】現場出席簽到，已自動返回首頁列表！`
+              : `✅ 簽核成功！已自動返回首頁待簽列表（本筆紀錄已移入「📚 歷史紀錄專區」）`
+          );
         }
-        showToast(
-          mode === 'checkin'
-            ? `✅ ${user.name} 已完成【${data.meeting.title}】現場出席簽到，已自動返回首頁列表！`
-            : `✅ 簽核成功！已自動返回首頁待簽列表（本筆紀錄已移入「📚 歷史紀錄專區」）`
-        );
       } else {
         alert(data.error || '簽核失敗');
       }
@@ -493,6 +553,25 @@ export default function HomePage() {
       alert('網路錯誤，請稍後再試');
     } finally {
       setSigningLoading(false);
+    }
+  };
+
+  // 開啟現場簽到 QR Code 彈窗（發起會議後即可供現場與會同仁手機掃碼簽到）
+  const openFrontendQrModal = async (meeting) => {
+    if (!meeting) return;
+    setQrModalMeeting(meeting);
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const url = `${origin}/?checkin=${encodeURIComponent(meeting.id)}`;
+    setCheckinUrl(url);
+    try {
+      const dataUrl = await QRCode.toDataURL(url, {
+        width: 300,
+        margin: 2,
+        color: { dark: '#0f172a', light: '#ffffff' }
+      });
+      setQrDataUrl(dataUrl);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -538,8 +617,8 @@ export default function HomePage() {
     }
   };
 
-  // ==================== 同仁前台直接「發起會議紀錄 / 編輯會議紀錄」功能 ====================
-  const openStaffMeetingCreator = (existingMeeting = null) => {
+  // ==================== 同仁前台「STEP 1：發起新會議 (initiate)」與「STEP 2：點選進入執行會議紀錄 (record)」功能 ====================
+  const openStaffMeetingCreator = (existingMeeting = null, targetMode = null) => {
     const allActiveNames = staffList.filter((s) => s.status !== '離職').map((s) => s.name);
     const activeNames = staffList.filter((s) => s.status === '在職').map((s) => s.name);
     const defaultLeaveNames = allActiveNames.filter((n) => !activeNames.includes(n));
@@ -550,13 +629,16 @@ export default function HomePage() {
 
     if (existingMeeting) {
       const copy = JSON.parse(JSON.stringify(existingMeeting));
-      const curPresent = copy.presentStaffNames || [];
+      const checkedInNames = Object.keys(copy.checkins || {});
+      const curPresent = Array.from(new Set([...(copy.presentStaffNames || []), ...checkedInNames]));
+      copy.presentStaffNames = curPresent;
       const rawLeave = Array.isArray(copy.leaveStaffNames) ? copy.leaveStaffNames : [];
       copy.leaveStaffNames = Array.from(
         new Set([...rawLeave, ...allActiveNames.filter((n) => !curPresent.includes(n))].filter((n) => !curPresent.includes(n)))
       );
       setStaffDraftMeeting(copy);
       setVoiceQuickText(existingMeeting.rawTranscript || '');
+      setModalMode(targetMode || 'record');
     } else {
       setStaffDraftMeeting({
         id: '',
@@ -567,12 +649,12 @@ export default function HomePage() {
         rocYear: rocYr,
         displayDate: `${rocYr} 年 ${new Date().getMonth() + 1} 月 ${new Date().getDate()} 日 12:30`,
         location: '影像醫學科 會議室',
-        chair: currentUser?.name || '林宜蓁',
+        chair: '林宜蓁',
         recorder: currentUser?.name || '潘俊儒',
-        status: 'published',
+        status: 'in_progress',
         isArchived: false,
         targetGroups: ['全科人員'],
-        expectedCount: allActiveNames.length || activeNames.length || 20,
+        expectedCount: allActiveNames.length || activeNames.length || 22,
         presentStaffNames: activeNames,
         leaveStaffNames: defaultLeaveNames,
         agendaItems: ['1. 主席報告事項', '2. 本次會議討論事項'],
@@ -588,6 +670,7 @@ export default function HomePage() {
         surveyTitle: ''
       });
       setVoiceQuickText('');
+      setModalMode(targetMode || 'initiate');
     }
     setShowCreateModal(true);
   };
@@ -1213,7 +1296,7 @@ export default function HomePage() {
     e.target.value = '';
   };
 
-  const handleSaveStaffMeeting = async (e) => {
+  const handleSaveStaffMeeting = async (e, targetStatusOverride = null) => {
     if (e) e.preventDefault();
     if (!staffDraftMeeting?.title?.trim()) {
       alert('請輸入會議正式標題！');
@@ -1227,9 +1310,17 @@ export default function HomePage() {
         bullets: (sec.bullets || []).filter((b) => String(b).trim() !== '')
       }));
 
+      const nextStatus =
+        targetStatusOverride ||
+        (modalMode === 'initiate' && !staffDraftMeeting.id
+          ? 'in_progress'
+          : staffDraftMeeting.status || 'in_progress');
+
       const payloadMeeting = {
         ...staffDraftMeeting,
         title: staffDraftMeeting.title.trim(),
+        status: nextStatus,
+        rawTranscript: voiceQuickText || staffDraftMeeting.rawTranscript || '',
         agendaItems: (staffDraftMeeting.agendaItems || []).filter((a) => String(a).trim() !== ''),
         discussionSections:
           cleanedSections.length > 0
@@ -1251,16 +1342,23 @@ export default function HomePage() {
       if (res.ok && data.success) {
         setMeetings(data.meetings || []);
         if (data.savedMeeting) {
-          setActiveMeetingId(data.savedMeeting.id);
-          if (data.savedMeeting.isArchived) {
-            setActiveZone('history');
-          } else {
+          if (modalMode === 'initiate') {
+            // STEP 1 發起完成後返回首頁列表，讓與會同仁可點選進去簽到，記錄人點選進去執行會議紀錄！
             setActiveZone('home');
+            setActiveMeetingId(null);
+          } else {
+            // STEP 2 執行會議紀錄暫存或結束會議送審後，停留在該場會議檢視最新狀態
+            setActiveMeetingId(data.savedMeeting.id);
+            if (data.savedMeeting.isArchived) {
+              setActiveZone('history');
+            } else {
+              setActiveZone('home');
+            }
           }
         }
         setShowCreateModal(false);
         setStaffDraftMeeting(null);
-        showToast(data.message || '✅ 會議紀錄已成功發起！');
+        showToast(data.message || '✅ 會議資料已成功儲存！');
       } else {
         alert(data.error || '儲存會議紀錄失敗');
       }
@@ -1268,6 +1366,79 @@ export default function HomePage() {
       alert('網路連線異常，請稍後再試');
     } finally {
       setSavingStaffMeeting(false);
+    }
+  };
+
+  // STEP 2 ➔ STEP 3：記錄人完成會議後按「結束會議」（結束資料登錄，送交技術主任確認無誤後按公布）
+  const handleFinishMeetingRecord = async (meeting) => {
+    if (!meeting) return;
+    setSavingStaffMeeting(true);
+    try {
+      const res = await fetch('/api/meetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'finish_meeting_record',
+          id: meeting.id,
+          recorderName: currentUser?.name || meeting.recorder
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMeetings(data.meetings || []);
+        showToast(
+          data.message || '🏁 已結束會議並完成資料登錄！正待技術主任確認無誤後按「公布」。'
+        );
+      } else {
+        alert(data.error || '結束會議失敗');
+      }
+    } catch (err) {
+      alert('網路連線異常');
+    } finally {
+      setSavingStaffMeeting(false);
+    }
+  };
+
+  // STEP 3 ➔ STEP 4（或退回 STEP 2）：技術主任確認無誤按「公布」 OR 退回記錄人修改資料（保留已維護資料內容退回上一步）
+  const handleDirectorReviewMeeting = async (meetingId, decision, customReason = null) => {
+    let reasonText = customReason !== null ? customReason : directorReviewReason.trim();
+    if (decision === 'return' && !reasonText) {
+      const prompted = window.prompt(
+        '請輸入退回記錄人修改的原因或補充說明（系統將完整保留所有已維護之會議紀錄內容退回上一步）：',
+        '請記錄人補充或修正會議紀錄內容後，再次按結束會議送出確認'
+      );
+      if (prompted === null) return;
+      reasonText = prompted.trim() || '請記錄人補充或修正會議紀錄內容後，再次送出確認';
+    }
+
+    setReviewSubmitting(true);
+    try {
+      const reviewerLabel = currentUser?.name
+        ? `${currentUser.name}（${currentUser.title || '技術主任'}）`
+        : '林宜蓁（技術主任）';
+      const res = await fetch('/api/meetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'director_review_meeting',
+          id: meetingId,
+          decision,
+          reviewerName: reviewerLabel,
+          reason: reasonText
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMeetings(data.meetings || []);
+        setDirectorReviewReason('');
+        showToast(data.message);
+      } else {
+        alert(data.error || '審核操作失敗');
+      }
+    } catch (err) {
+      alert('網路連線異常');
+    } finally {
+      setReviewSubmitting(false);
     }
   };
 
@@ -1288,14 +1459,17 @@ export default function HomePage() {
       return { label: '📦 已結案歸檔（歷史專區）', bg: '#e2e8f0', color: '#334155' };
     }
     switch (m.status) {
-      case 'published':
-        return { label: '✅ 開放簽閱中', bg: '#d1fae5', color: '#065f46' };
+      case 'in_progress':
+        return { label: '🟢 會議進行中（開放現場簽到 & 點選執行會議紀錄）', bg: '#dcfce7', color: '#15803d' };
+      case 'returned':
+        return { label: '🟠 技術主任退回修改中（已保留原維護資料內容）', bg: '#ffedd5', color: '#c2410c' };
+      case 'pending_review':
       case 'pending_director':
-        return { label: '⏳ 待科主任最終核准', bg: '#fef3c7', color: '#92400e' };
       case 'pending_chair':
-        return { label: '⏳ 待會議主席覆核', bg: '#e0e7ff', color: '#3730a3' };
+        return { label: '⏳ 已結束會議・待技術主任確認公布', bg: '#fef3c7', color: '#b45309' };
+      case 'published':
       default:
-        return { label: '📝 紀錄整理草稿', bg: '#f1f5f9', color: '#475569' };
+        return { label: '✅ 技術主任已公布・開放查閱簽閱中', bg: '#d1fae5', color: '#065f46' };
     }
   };
 
@@ -1381,10 +1555,10 @@ export default function HomePage() {
     }
   };
 
-  // 根據當前所在的專區 (`home` 或 `history`) 進行過濾；若使用者輸入搜尋關鍵字，自動跨全庫（含所有歷史會議紀錄）進行檢索！
+  // 根據當前所在的專區 (`home` 或 `history`) 進行過濾；若使用者輸入搜尋關鍵字，僅檢索該同仁有權限查閱之會議（未公布前一般同仁無法搜尋未公開內容）
   const isSearchingKeyword = Boolean(searchQuery.trim());
   const baseZoneMeetings = isSearchingKeyword
-    ? meetings
+    ? meetings.filter((m) => canViewMeetingMinutesContent(m, currentUser))
     : activeZone === 'home'
     ? homePendingMeetings
     : historyMeetingsAll;
@@ -1740,11 +1914,11 @@ export default function HomePage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <button
             type="button"
-            onClick={() => openStaffMeetingCreator()}
+            onClick={() => openStaffMeetingCreator(null, 'initiate')}
             className="btn btn-success"
             style={{ padding: '0.52rem 1rem', fontSize: '0.9rem' }}
           >
-            <Plus size={17} /> ➕ 發起會議紀錄
+            <Plus size={17} /> ➕ 發起新會議
           </button>
           <button
             type="button"
@@ -1999,11 +2173,11 @@ export default function HomePage() {
             )}
             <button
               type="button"
-              onClick={() => openStaffMeetingCreator()}
+              onClick={() => openStaffMeetingCreator(null, 'initiate')}
               className="btn btn-success"
               style={{ padding: '0.4rem 0.9rem', fontSize: '0.84rem' }}
             >
-              <Plus size={15} /> ➕ 發起會議紀錄
+              <Plus size={15} /> ➕ 發起新會議
             </button>
           </div>
         </div>
@@ -2142,11 +2316,11 @@ export default function HomePage() {
             <div style={{ display: 'flex', gap: '0.65rem', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
                 type="button"
-                onClick={() => openStaffMeetingCreator()}
+                onClick={() => openStaffMeetingCreator(null, 'initiate')}
                 className="btn btn-success"
                 style={{ padding: '0.85rem 1.6rem', fontSize: '1.02rem' }}
               >
-                <Plus size={19} /> ➕ 發起新會議紀錄（含語音轉紀錄）
+                <Plus size={19} /> ➕ 發起新會議（開啟現場簽到）
               </button>
               <button
                 type="button"
@@ -2240,12 +2414,15 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                {/* 列表每一列（分類、標題與關鍵字命中段落明細、已簽核/未簽核顏色與數字、時間） */}
+                {/* 列表每一列（分類、標題與流程狀態／關鍵字命中段落明細、已簽核/未簽核顏色與數字、時間） */}
                 {visibleMeetings.map((m, idx) => {
                   const cat = getCategoryBadge(m.category);
                   const searchMatches = isSearchingKeyword ? getMeetingSearchMatches(m, searchQuery) : [];
                   const signedMap = m.signatures || {};
+                  const checkinsMap = m.checkins || {};
                   const isSignedByMe = Boolean(currentUser && signedMap[currentUser.name]);
+                  const isCheckedInByMe = Boolean(currentUser && checkinsMap[currentUser.name]);
+                  const checkinCount = Object.keys(checkinsMap).length;
                   const signedCount = Object.keys(signedMap).length;
                   const inServiceNames = staffList.filter((s) => s.status === '在職').map((s) => s.name);
                   const targetPool =
@@ -2253,6 +2430,8 @@ export default function HomePage() {
                       ? Array.from(new Set([...(m.presentStaffNames || []), ...Object.keys(signedMap)]))
                       : Array.from(new Set([...inServiceNames, ...(m.presentStaffNames || [])]));
                   const unsignedCount = Math.max(0, targetPool.filter((n) => !signedMap[n]).length);
+                  const isPendingTechReview =
+                    m.status === 'pending_review' || m.status === 'pending_chair' || m.status === 'pending_director';
 
                   return (
                     <div
@@ -2269,14 +2448,28 @@ export default function HomePage() {
                         padding: '0.9rem 1.2rem',
                         borderBottom: idx === visibleMeetings.length - 1 ? 'none' : '1px solid #e2e8f0',
                         cursor: 'pointer',
-                        background: '#ffffff',
+                        background:
+                          m.status === 'returned'
+                            ? '#fff7ed'
+                            : m.status === 'in_progress'
+                            ? '#f0fdf4'
+                            : isPendingTechReview
+                            ? '#fffbeb'
+                            : '#ffffff',
                         transition: 'background 0.15s'
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.background = '#f8fafc';
                       }}
                       onMouseLeave={(e) => {
-                        e.currentTarget.style.background = '#ffffff';
+                        e.currentTarget.style.background =
+                          m.status === 'returned'
+                            ? '#fff7ed'
+                            : m.status === 'in_progress'
+                            ? '#f0fdf4'
+                            : isPendingTechReview
+                            ? '#fffbeb'
+                            : '#ffffff';
                       }}
                     >
                       {/* 1. 分類 */}
@@ -2299,7 +2492,7 @@ export default function HomePage() {
                         )}
                       </div>
 
-                      {/* 2. 標題（若有搜尋關鍵字則附帶所有命中段落明細預覽） */}
+                      {/* 2. 標題（附帶流程狀態標籤及關鍵字命中段落明細預覽） */}
                       <div style={{ minWidth: 0 }}>
                         <div
                           style={{
@@ -2318,13 +2511,79 @@ export default function HomePage() {
                               width: '9px',
                               height: '9px',
                               borderRadius: '50%',
-                              background: isSignedByMe ? '#10b981' : '#ef4444',
+                              background:
+                                m.status === 'in_progress'
+                                  ? '#16a34a'
+                                  : m.status === 'returned'
+                                  ? '#ea580c'
+                                  : isPendingTechReview
+                                  ? '#d97706'
+                                  : isSignedByMe
+                                  ? '#10b981'
+                                  : '#ef4444',
                               display: 'inline-block',
                               flexShrink: 0
                             }}
-                            title={isSignedByMe ? '您已簽核' : '您尚未簽核'}
+                            title={getStatusBadge(m).label}
                           />
                           <HighlightText text={m.title} keyword={searchQuery} />
+
+                          {/* 流程狀態醒目標籤 */}
+                          {m.status === 'in_progress' && (
+                            <>
+                              <span
+                                className="badge"
+                                style={{ background: '#dcfce7', color: '#15803d', fontSize: '0.74rem', padding: '0.16rem 0.55rem' }}
+                              >
+                                🟢 會議進行中（開放現場簽到）
+                              </span>
+                              {isCheckedInByMe && (
+                                <span
+                                  className="badge"
+                                  style={{ background: '#d1fae5', color: '#065f46', fontSize: '0.72rem', padding: '0.14rem 0.5rem' }}
+                                >
+                                  ✅ 您已現場簽到
+                                </span>
+                              )}
+                              {isRecorderOrInitiator(m, currentUser) && (
+                                <span
+                                  className="badge"
+                                  style={{ background: '#2563eb', color: '#ffffff', fontSize: '0.73rem', padding: '0.16rem 0.55rem' }}
+                                >
+                                  📝 點此進入執行會議紀錄
+                                </span>
+                              )}
+                            </>
+                          )}
+
+                          {m.status === 'returned' && (
+                            <span
+                              className="badge"
+                              style={{ background: '#ea580c', color: '#ffffff', fontSize: '0.74rem', padding: '0.16rem 0.55rem' }}
+                            >
+                              🟠 技術主任退回修改（點此修改已保留之資料）
+                            </span>
+                          )}
+
+                          {isPendingTechReview && (
+                            <>
+                              <span
+                                className="badge"
+                                style={{ background: '#fef3c7', color: '#b45309', fontSize: '0.74rem', padding: '0.16rem 0.55rem' }}
+                              >
+                                ⏳ 已結束會議・待技術主任確認公布
+                              </span>
+                              {isTechDirectorOrSupervisor(currentUser) && (
+                                <span
+                                  className="badge"
+                                  style={{ background: '#7c3aed', color: '#ffffff', fontSize: '0.73rem', padding: '0.16rem 0.55rem' }}
+                                >
+                                  🛡️ 點此審核公布／退回修改
+                                </span>
+                              )}
+                            </>
+                          )}
+
                           {isSearchingKeyword && searchMatches.length > 0 && (
                             <span
                               className="badge"
@@ -2339,6 +2598,22 @@ export default function HomePage() {
                             </span>
                           )}
                         </div>
+                        {m.status === 'returned' && m.returnReason && (
+                          <div
+                            style={{
+                              marginTop: '0.35rem',
+                              fontSize: '0.8rem',
+                              color: '#9a3412',
+                              background: '#ffedd5',
+                              border: '1px solid #fdba74',
+                              padding: '0.28rem 0.6rem',
+                              borderRadius: '6px',
+                              fontWeight: 600
+                            }}
+                          >
+                            ↩️ 技術主任退回修改說明：{m.returnReason}
+                          </div>
+                        )}
                         {isSearchingKeyword && searchMatches.length > 0 && (
                           <div
                             style={{
@@ -2383,39 +2658,62 @@ export default function HomePage() {
                         )}
                       </div>
 
-                      {/* 3. 已簽核 / 未簽核（僅顯示數字與顏色） */}
+                      {/* 3. 已簽核 / 未簽核（進行中顯示現場簽到人數；已公布顯示已簽核/未簽核人數） */}
                       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.35rem' }}>
-                        <span
-                          style={{
-                            background: '#d1fae5',
-                            color: '#059669',
-                            fontWeight: 800,
-                            fontSize: '0.88rem',
-                            padding: '0.2rem 0.6rem',
-                            borderRadius: '999px',
-                            minWidth: '34px',
-                            textAlign: 'center'
-                          }}
-                          title={`已簽核 ${signedCount} 人`}
-                        >
-                          {signedCount}
-                        </span>
-                        <span style={{ color: '#cbd5e1', fontWeight: 700 }}>/</span>
-                        <span
-                          style={{
-                            background: unsignedCount > 0 ? '#fee2e2' : '#f1f5f9',
-                            color: unsignedCount > 0 ? '#dc2626' : '#94a3b8',
-                            fontWeight: 800,
-                            fontSize: '0.88rem',
-                            padding: '0.2rem 0.6rem',
-                            borderRadius: '999px',
-                            minWidth: '34px',
-                            textAlign: 'center'
-                          }}
-                          title={`未簽核 ${unsignedCount} 人`}
-                        >
-                          {unsignedCount}
-                        </span>
+                        {m.status && m.status !== 'published' ? (
+                          <span
+                            style={{
+                              background: m.status === 'in_progress' ? '#dcfce7' : '#fef3c7',
+                              color: m.status === 'in_progress' ? '#15803d' : '#b45309',
+                              fontWeight: 800,
+                              fontSize: '0.78rem',
+                              padding: '0.22rem 0.65rem',
+                              borderRadius: '999px',
+                              textAlign: 'center',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {m.status === 'in_progress'
+                              ? `📲 現場簽到 ${checkinCount} 人`
+                              : m.status === 'returned'
+                              ? '🟠 待記錄人修改'
+                              : '⏳ 待主任公布'}
+                          </span>
+                        ) : (
+                          <>
+                            <span
+                              style={{
+                                background: '#d1fae5',
+                                color: '#059669',
+                                fontWeight: 800,
+                                fontSize: '0.88rem',
+                                padding: '0.2rem 0.6rem',
+                                borderRadius: '999px',
+                                minWidth: '34px',
+                                textAlign: 'center'
+                              }}
+                              title={`已簽核 ${signedCount} 人`}
+                            >
+                              {signedCount}
+                            </span>
+                            <span style={{ color: '#cbd5e1', fontWeight: 700 }}>/</span>
+                            <span
+                              style={{
+                                background: unsignedCount > 0 ? '#fee2e2' : '#f1f5f9',
+                                color: unsignedCount > 0 ? '#dc2626' : '#94a3b8',
+                                fontWeight: 800,
+                                fontSize: '0.88rem',
+                                padding: '0.2rem 0.6rem',
+                                borderRadius: '999px',
+                                minWidth: '34px',
+                                textAlign: 'center'
+                              }}
+                              title={`未簽核 ${unsignedCount} 人`}
+                            >
+                              {unsignedCount}
+                            </span>
+                          </>
+                        )}
                       </div>
 
                       {/* 4. 時間 */}
@@ -2479,32 +2777,75 @@ export default function HomePage() {
               flexWrap: 'wrap',
               gap: '0.6rem',
               paddingBottom: '1rem',
-              marginBottom: '1.1rem',
+              marginBottom: '1rem',
               borderBottom: '1px solid #e2e8f0'
             }}
           >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <span
-                    className="badge"
-                    style={{
-                      background: getCategoryBadge(activeMeeting.category).badgeBg,
-                      color: getCategoryBadge(activeMeeting.category).color
-                    }}
-                  >
-                    {getCategoryBadge(activeMeeting.category).name}
-                  </span>
-                  <span
-                    className="badge"
-                    style={{
-                      background: getStatusBadge(activeMeeting).bg,
-                      color: getStatusBadge(activeMeeting).color
-                    }}
-                  >
-                    {getStatusBadge(activeMeeting).label}
-                  </span>
-                </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span
+                className="badge"
+                style={{
+                  background: getCategoryBadge(activeMeeting.category).badgeBg,
+                  color: getCategoryBadge(activeMeeting.category).color
+                }}
+              >
+                {getCategoryBadge(activeMeeting.category).name}
+              </span>
+              <span
+                className="badge"
+                style={{
+                  background: getStatusBadge(activeMeeting).bg,
+                  color: getStatusBadge(activeMeeting).color
+                }}
+              >
+                {getStatusBadge(activeMeeting).label}
+              </span>
+            </div>
 
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {(activeMeeting.status === 'in_progress' || activeMeeting.status === 'returned') && (
+                <button
+                  type="button"
+                  onClick={() => openFrontendQrModal(activeMeeting)}
+                  className="btn btn-secondary"
+                  style={{ padding: '0.5rem 0.9rem', fontSize: '0.86rem', background: '#f0fdf4', color: '#15803d', borderColor: '#86efac' }}
+                >
+                  <QrCode size={16} /> 現場簽到 QR Code
+                </button>
+              )}
+
+              {(activeMeeting.status === 'in_progress' || activeMeeting.status === 'returned') &&
+                isRecorderOrInitiator(activeMeeting, currentUser) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openStaffMeetingCreator(activeMeeting, 'record')}
+                      className="btn"
+                      style={{
+                        padding: '0.5rem 0.95rem',
+                        fontSize: '0.86rem',
+                        background: activeMeeting.status === 'returned' ? '#ea580c' : '#2563eb'
+                      }}
+                    >
+                      <Edit3 size={16} />{' '}
+                      {activeMeeting.status === 'returned'
+                        ? '✏️ 修改會議紀錄資料（已保留原維護內容）'
+                        : '📝 進入執行會議紀錄'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFinishMeetingRecord(activeMeeting)}
+                      disabled={savingStaffMeeting}
+                      className="btn btn-purple"
+                      style={{ padding: '0.5rem 0.95rem', fontSize: '0.86rem' }}
+                    >
+                      <CheckCircle2 size={16} /> 🏁 結束會議（完成登錄送技術主任確認）
+                    </button>
+                  </>
+                )}
+
+              {(!activeMeeting.status || activeMeeting.status === 'published') && (
+                <>
                   {!isCurrentMeetingSigned && (
                     <button
                       type="button"
@@ -2518,7 +2859,10 @@ export default function HomePage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSigPad(!showSigPad)}
+                    onClick={() => {
+                      setSigPadMode('sign');
+                      setShowSigPad(!showSigPad);
+                    }}
                     className="btn"
                     style={{ padding: '0.5rem 0.95rem', fontSize: '0.86rem' }}
                   >
@@ -2537,14 +2881,21 @@ export default function HomePage() {
                   >
                     📝 {activeMeeting.surveyUrl ? activeMeeting.surveyTitle || '填寫本場會議問卷' : '前往問卷系統'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => openStaffMeetingCreator(activeMeeting)}
-                    className="btn btn-secondary"
-                    style={{ padding: '0.5rem 0.9rem', fontSize: '0.86rem', color: '#1e40af', borderColor: '#93c5fd', background: '#eff6ff' }}
-                  >
-                    <Edit3 size={16} /> 編輯此會議 / 改標題
-                  </button>
+                  {isRecorderOrInitiator(activeMeeting, currentUser) && (
+                    <button
+                      type="button"
+                      onClick={() => openStaffMeetingCreator(activeMeeting, 'record')}
+                      className="btn btn-secondary"
+                      style={{ padding: '0.5rem 0.9rem', fontSize: '0.86rem', color: '#1e40af', borderColor: '#93c5fd', background: '#eff6ff' }}
+                    >
+                      <Edit3 size={16} /> 編輯此會議 / 改標題
+                    </button>
+                  )}
+                </>
+              )}
+
+              {canViewMeetingMinutesContent(activeMeeting, currentUser) && (
+                <>
                   <button
                     type="button"
                     onClick={() => handleExportWord(activeMeeting)}
@@ -2561,8 +2912,383 @@ export default function HomePage() {
                   >
                     <Printer size={16} /> 列印 / 存成 PDF
                   </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* ==================== 會議標準作業流程 4 階段進度條 ==================== */}
+          {(() => {
+            const st = activeMeeting.status || 'published';
+            const isPendingRev = st === 'pending_review' || st === 'pending_chair' || st === 'pending_director';
+            const steps = [
+              {
+                num: '1',
+                title: '發起會議 & 現場簽到',
+                desc: '建立會議場次，開放與會人員先簽到',
+                done: true,
+                active: st === 'in_progress'
+              },
+              {
+                num: '2',
+                title: '執行會議紀錄 & 結束會議',
+                desc: st === 'returned' ? '🟠 主任退回修改中(保留原資料)' : '點選進去做會議紀錄，完成後結束會議',
+                done: isPendingRev || st === 'published',
+                active: st === 'in_progress' || st === 'returned',
+                isReturned: st === 'returned'
+              },
+              {
+                num: '3',
+                title: '待技術主任確認公布',
+                desc: '確認無誤按公布；如需修改退回記錄人',
+                done: st === 'published',
+                active: isPendingRev
+              },
+              {
+                num: '4',
+                title: '正式公布 & 全科查閱',
+                desc: '公布後其他人員方能查閱與簽認',
+                done: st === 'published',
+                active: st === 'published'
+              }
+            ];
+
+            return (
+              <div
+                className="no-print"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                  gap: '0.6rem',
+                  marginBottom: '1.15rem',
+                  background: '#f8fafc',
+                  padding: '0.85rem',
+                  borderRadius: '12px',
+                  border: '1px solid #cbd5e1'
+                }}
+              >
+                {steps.map((s) => (
+                  <div
+                    key={s.num}
+                    style={{
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: '10px',
+                      background: s.isReturned
+                        ? '#fff7ed'
+                        : s.active
+                        ? '#eff6ff'
+                        : s.done
+                        ? '#f0fdf4'
+                        : '#ffffff',
+                      border: s.isReturned
+                        ? '2px solid #ea580c'
+                        : s.active
+                        ? '2px solid #2563eb'
+                        : s.done
+                        ? '1px solid #86efac'
+                        : '1px solid #e2e8f0'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 800, fontSize: '0.86rem', color: s.isReturned ? '#c2410c' : s.active ? '#1d4ed8' : s.done ? '#15803d' : '#64748b' }}>
+                      <span
+                        style={{
+                          width: '22px',
+                          height: '22px',
+                          borderRadius: '50%',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.76rem',
+                          background: s.isReturned ? '#ea580c' : s.active ? '#2563eb' : s.done ? '#16a34a' : '#cbd5e1',
+                          color: '#ffffff'
+                        }}
+                      >
+                        {s.done && !s.active ? '✓' : s.num}
+                      </span>
+                      <span>STEP {s.num}・{s.title}</span>
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: '#475569', marginTop: '0.25rem', paddingLeft: '1.75rem' }}>
+                      {s.desc}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* ==================== STAGE 1 & 2 (in_progress)：現場出席簽到專區 ＆ 記錄人執行會議紀錄控制台 ==================== */}
+          {activeMeeting.status === 'in_progress' && (
+            <div className="no-print" style={{ display: 'flex', flexDirection: 'column', gap: '0.95rem', marginBottom: '1.25rem' }}>
+              {/* A. 全體與會人員：現場出席簽到區 */}
+              {(() => {
+                const myCheckin = activeMeeting.checkins?.[currentUser.name] || null;
+                const checkinList = Object.values(activeMeeting.checkins || {});
+                return (
+                  <div
+                    style={{
+                      background: myCheckin ? '#ecfdf5' : '#f0fdf4',
+                      border: myCheckin ? '2px solid #10b981' : '2px solid #22c55e',
+                      borderRadius: '14px',
+                      padding: '1.15rem 1.25rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      <div>
+                        <span className="badge" style={{ background: '#16a34a', color: '#ffffff', marginBottom: '0.3rem' }}>
+                          🟢 會議進行中・STEP 1 現場出席簽到
+                        </span>
+                        <h3 style={{ margin: 0, fontSize: '1.12rem', color: '#065f46' }}>
+                          {myCheckin
+                            ? `✅ ${currentUser.name}，您已完成本場會議【現場出席簽到】！`
+                            : `📲 ${currentUser.name}，本場會議已發起，請先點選完成【現場出席簽到】`}
+                        </h3>
+                        <div style={{ fontSize: '0.84rem', color: '#047857', marginTop: '0.25rem' }}>
+                          {myCheckin
+                            ? `簽到方式：${myCheckin.method} ｜ 簽到時間：${new Date(myCheckin.checkedInAt).toLocaleString('zh-TW')}`
+                            : '點選右側按鈕即可一鍵完成現場簽到（系統將自動把您列入本場會議出席人員名單）！'}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {!myCheckin && (
+                          <button
+                            type="button"
+                            disabled={signingLoading}
+                            onClick={() => handleSignMeeting(activeMeeting.id, 'checkin', null, '現場出席簽到')}
+                            className="btn btn-success"
+                            style={{ padding: '0.6rem 1.15rem', fontSize: '0.92rem' }}
+                          >
+                            <UserCheck size={18} /> 📲 立即完成現場出席簽到
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSigPadMode('checkin');
+                            setShowSigPad(true);
+                          }}
+                          className="btn"
+                          style={{ background: '#0f766e', padding: '0.6rem 1rem', fontSize: '0.88rem' }}
+                        >
+                          <PenTool size={16} /> {myCheckin ? '更新手寫簽到簽名' : '✍️ 手寫電子簽名簽到'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openFrontendQrModal(activeMeeting)}
+                          className="btn btn-secondary"
+                          style={{ padding: '0.6rem 0.95rem', fontSize: '0.86rem', background: '#ffffff', color: '#15803d', borderColor: '#86efac' }}
+                        >
+                          <QrCode size={16} /> 顯示簽到 QR Code
+                        </button>
+                      </div>
+                    </div>
+
+                    {checkinList.length > 0 && (
+                      <div style={{ marginTop: '0.8rem', paddingTop: '0.7rem', borderTop: '1px dashed #86efac', fontSize: '0.83rem', color: '#065f46' }}>
+                        <strong>🙌 目前已完成現場簽到同仁（{checkinList.length} 人）：</strong>
+                        {checkinList.map((c) => c.name).join('、')}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* B. 記錄人 / 發起人 / 主席 / 主任專屬：點選進入執行會議紀錄 & 完成會議後結束會議 */}
+              {isRecorderOrInitiator(activeMeeting, currentUser) && (
+                <div
+                  style={{
+                    background: '#eff6ff',
+                    border: '2px solid #2563eb',
+                    borderRadius: '14px',
+                    padding: '1.15rem 1.25rem',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '0.85rem'
+                  }}
+                >
+                  <div style={{ flex: '1 1 320px' }}>
+                    <span className="badge" style={{ background: '#2563eb', color: '#ffffff', marginBottom: '0.3rem' }}>
+                      📝 STEP 2・執行會議紀錄與結束資料登錄（記錄人：{activeMeeting.recorder}）
+                    </span>
+                    <h3 style={{ margin: 0, fontSize: '1.12rem', color: '#1e3a8a' }}>
+                      點選「📝 進入執行會議紀錄」開始語音轉譯／登錄內容；完成會議後請按「🏁 結束會議」
+                    </h3>
+                    <div style={{ fontSize: '0.84rem', color: '#334155', marginTop: '0.25rem' }}>
+                      會議進行期間可隨時暫存紀錄資料；當會議結束、按下「<strong>🏁 結束會議</strong>」後即結束資料登錄，並送交<strong>技術主任確認無誤後按「公布」</strong>。
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => openStaffMeetingCreator(activeMeeting, 'record')}
+                      className="btn"
+                      style={{ background: '#2563eb', padding: '0.68rem 1.25rem', fontSize: '0.95rem' }}
+                    >
+                      <Edit3 size={18} /> 📝 點此進入執行會議紀錄（語音轉譯／手寫稿／議程決議）
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingStaffMeeting}
+                      onClick={() => handleFinishMeetingRecord(activeMeeting)}
+                      className="btn btn-purple"
+                      style={{ padding: '0.68rem 1.25rem', fontSize: '0.95rem' }}
+                    >
+                      <CheckCircle2 size={18} /> 🏁 結束會議（完成資料登錄，送技術主任確認）
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ==================== STAGE 2-RETURNED (returned)：技術主任退回記錄人修改資料（保留已維護資料內容退回上一步） ==================== */}
+          {activeMeeting.status === 'returned' && isRecorderOrInitiator(activeMeeting, currentUser) && (
+            <div
+              className="no-print"
+              style={{
+                background: '#fff7ed',
+                border: '2.5px solid #ea580c',
+                borderRadius: '14px',
+                padding: '1.2rem 1.3rem',
+                marginBottom: '1.25rem'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.85rem' }}>
+                <div style={{ flex: '1 1 320px' }}>
+                  <span className="badge" style={{ background: '#ea580c', color: '#ffffff', marginBottom: '0.35rem' }}>
+                    🟠 技術主任退回修改中（已 100% 保留原維護資料內容退回上一步）
+                  </span>
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#9a3412' }}>
+                    ↩️ 退回修改通知（退回主管：{activeMeeting.returnedBy || '林宜蓁 技術主任'}）
+                  </h3>
+                  <div
+                    style={{
+                      marginTop: '0.45rem',
+                      padding: '0.55rem 0.85rem',
+                      background: '#ffedd5',
+                      border: '1px solid #fdba74',
+                      borderRadius: '8px',
+                      color: '#7c2d12',
+                      fontWeight: 700,
+                      fontSize: '0.9rem'
+                    }}
+                  >
+                    💬 需修改事項說明：{activeMeeting.returnReason || '請補充或修正會議紀錄資料後重新送交技術主任確認'}
+                  </div>
+                  <div style={{ fontSize: '0.82rem', color: '#9a3412', marginTop: '0.35rem' }}>
+                    💡 系統已完整保留您先前維護的所有議程、討論內容、決議、待辦事項、語音逐字稿與附件。請點選右側「<strong>✏️ 修改會議紀錄資料</strong>」修正後，再次按「<strong>🏁 修改完成・重送技術主任確認</strong>」！
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => openStaffMeetingCreator(activeMeeting, 'record')}
+                    className="btn"
+                    style={{ background: '#ea580c', padding: '0.68rem 1.25rem', fontSize: '0.95rem' }}
+                  >
+                    <Edit3 size={18} /> ✏️ 修改會議紀錄資料（已保留已維護資料內容）
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingStaffMeeting}
+                    onClick={() => handleFinishMeetingRecord(activeMeeting)}
+                    className="btn btn-purple"
+                    style={{ padding: '0.68rem 1.25rem', fontSize: '0.95rem' }}
+                  >
+                    <CheckCircle2 size={18} /> 🏁 修改完成・結束登錄並重送技術主任確認
+                  </button>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ==================== STAGE 3 (pending_review)：待技術主任確認無誤後按「公布」或「退回記錄人修改」 ==================== */}
+          {(activeMeeting.status === 'pending_review' ||
+            activeMeeting.status === 'pending_chair' ||
+            activeMeeting.status === 'pending_director') && (
+            <div className="no-print" style={{ marginBottom: '1.25rem' }}>
+              {isTechDirectorOrSupervisor(currentUser) ? (
+                <div
+                  style={{
+                    background: '#faf5ff',
+                    border: '2.5px solid #7c3aed',
+                    borderRadius: '14px',
+                    padding: '1.25rem 1.35rem'
+                  }}
+                >
+                  <div style={{ marginBottom: '0.85rem' }}>
+                    <span className="badge" style={{ background: '#7c3aed', color: '#ffffff', marginBottom: '0.35rem' }}>
+                      🛡️ STEP 3・技術主任審核確認專區（目前審核主管：{currentUser.name} {currentUser.title}）
+                    </span>
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#3b0764' }}>
+                      記錄人（{activeMeeting.recorder}）已完成會議並結束資料登錄，請確認下方會議紀錄內容是否無誤：
+                    </h3>
+                    <div style={{ fontSize: '0.84rem', color: '#4c1d95', marginTop: '0.25rem' }}>
+                      • 確認無誤後請按「<strong>✅ 確認無誤・正式公布</strong>」，其他人員才能開始查閱與簽閱本份會議紀錄。<br />
+                      • 如需修改請於下方輸入修改說明並按「<strong>↩️ 退回記錄人修改資料</strong>」（系統將完整保留已維護資料內容退回上一步供記錄人修改）。
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      value={directorReviewReason}
+                      onChange={(e) => setDirectorReviewReason(e.target.value)}
+                      placeholder="輸入審核批示或退回修改說明（如退回記錄人修改，請填寫需修改或補充之處）..."
+                      style={{ flex: '1 1 280px', background: '#ffffff', borderColor: '#c4b5fd' }}
+                    />
+                    <button
+                      type="button"
+                      disabled={reviewSubmitting}
+                      onClick={() => handleDirectorReviewMeeting(activeMeeting.id, 'publish')}
+                      className="btn btn-success"
+                      style={{ padding: '0.68rem 1.3rem', fontSize: '0.95rem' }}
+                    >
+                      <CheckCircle2 size={18} /> ✅ 確認無誤・正式公布（開放其他人員查閱）
+                    </button>
+                    <button
+                      type="button"
+                      disabled={reviewSubmitting}
+                      onClick={() => handleDirectorReviewMeeting(activeMeeting.id, 'return')}
+                      className="btn btn-danger"
+                      style={{ padding: '0.68rem 1.2rem', fontSize: '0.92rem', background: '#ea580c' }}
+                    >
+                      <RotateCcw size={17} /> ↩️ 退回記錄人修改資料（保留已維護內容退回上一步）
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openStaffMeetingCreator(activeMeeting, 'record')}
+                      className="btn btn-secondary"
+                      style={{ padding: '0.65rem 1rem', fontSize: '0.86rem' }}
+                    >
+                      <Edit3 size={16} /> 主任直接微調內容
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    background: '#fffbeb',
+                    border: '2px solid #f59e0b',
+                    borderRadius: '14px',
+                    padding: '1.1rem 1.25rem',
+                    color: '#92400e'
+                  }}
+                >
+                  <div style={{ fontWeight: 800, fontSize: '1.02rem', marginBottom: '0.25rem' }}>
+                    ⏳ 已結束會議並完成資料登錄 — 目前待「技術主任（林宜蓁）」確認無誤後按「公布」
+                  </div>
+                  <div style={{ fontSize: '0.86rem', lineHeight: 1.55 }}>
+                    本場會議已由記錄人（<strong>{activeMeeting.recorder}</strong>）結束資料登錄。待技術主任確認無誤並按「<strong>公布</strong>」後，其他人員方能查閱本份會議紀錄；若技術主任退回修改，系統將完整保留您已維護的資料內容退回上一步供您修改。
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
               {/* 醫院正式公版抬頭 */}
               <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
@@ -2648,309 +3374,338 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* 議程主題 */}
-              {activeMeeting.agendaItems && activeMeeting.agendaItems.length > 0 && (
-                <div style={{ marginBottom: '1.35rem' }}>
-                  <h3 style={{ fontSize: '1.08rem', color: '#1e3a8a', borderBottom: '2px solid #dbeafe', paddingBottom: '0.4rem', marginBottom: '0.75rem' }}>
-                    壹、會議議程與討論主題
+              {!canViewMeetingMinutesContent(activeMeeting, currentUser) ? (
+                <div
+                  className="card no-print"
+                  style={{
+                    background: '#fffbeb',
+                    border: '2px dashed #f59e0b',
+                    borderRadius: '14px',
+                    padding: '1.75rem 1.35rem',
+                    textAlign: 'center',
+                    marginBottom: '1.4rem'
+                  }}
+                >
+                  <Clock size={38} color="#d97706" style={{ marginBottom: '0.5rem' }} />
+                  <h3 style={{ margin: '0 0 0.45rem 0', fontSize: '1.18rem', color: '#92400e' }}>
+                    🔒 會議紀錄內容尚未公布（待技術主任確認無誤後開放其他人員查閱）
                   </h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', paddingLeft: '0.25rem' }}>
-                    {activeMeeting.agendaItems.map((item, i) => (
-                      <div key={i} style={{ fontSize: '0.94rem', fontWeight: 600, color: '#1e293b' }}>
-                        <HighlightText text={item} keyword={searchQuery} />
-                      </div>
-                    ))}
-                  </div>
+                  <p style={{ margin: '0 auto', maxWidth: '640px', fontSize: '0.9rem', color: '#78350f', lineHeight: 1.6 }}>
+                    依科內會議標準流程：發起會議後請先於上方完成「<strong>📲 現場出席簽到</strong>」，由記錄人（<strong>{activeMeeting.recorder}</strong>）執行會議紀錄並於完成後按「結束會議」；<strong>待技術主任確認無誤按「公布」後，其他人員方能查閱完整會議紀錄內容與簽閱</strong>。
+                  </p>
                 </div>
-              )}
-
-              {/* 會議討論內容 */}
-              <div style={{ marginBottom: '1.4rem' }}>
-                <h3 style={{ fontSize: '1.08rem', color: '#1e3a8a', borderBottom: '2px solid #dbeafe', paddingBottom: '0.4rem', marginBottom: '0.85rem' }}>
-                  貳、會議討論內容與紀錄
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  {(activeMeeting.discussionSections || []).map((sec, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        background: '#ffffff',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '12px',
-                        padding: '1rem 1.15rem'
-                      }}
-                    >
-                      <h4 style={{ margin: '0 0 0.6rem 0', fontSize: '1rem', color: '#0f172a' }}>
-                        <HighlightText text={sec.heading} keyword={searchQuery} />
-                      </h4>
-                      <ul style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.7, color: '#334155', fontSize: '0.93rem' }}>
-                        {(sec.bullets || []).map((b, bIdx) => (
-                          <li key={bIdx} style={{ marginBottom: '0.35rem' }}>
-                            <HighlightText text={b} keyword={searchQuery} />
-                          </li>
+              ) : (
+                <>
+                  {/* 議程主題 */}
+                  {activeMeeting.agendaItems && activeMeeting.agendaItems.length > 0 && (
+                    <div style={{ marginBottom: '1.35rem' }}>
+                      <h3 style={{ fontSize: '1.08rem', color: '#1e3a8a', borderBottom: '2px solid #dbeafe', paddingBottom: '0.4rem', marginBottom: '0.75rem' }}>
+                        壹、會議議程與討論主題
+                      </h3>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', paddingLeft: '0.25rem' }}>
+                        {activeMeeting.agendaItems.map((item, i) => (
+                          <div key={i} style={{ fontSize: '0.94rem', fontWeight: 600, color: '#1e293b' }}>
+                            <HighlightText text={item} keyword={searchQuery} />
+                          </div>
                         ))}
-                      </ul>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </div>
+                  )}
 
-              {/* 會議決議事項 */}
-              {activeMeeting.resolutions && activeMeeting.resolutions.length > 0 && (
-                <div style={{ marginBottom: '1.4rem' }}>
-                  <h3 style={{ fontSize: '1.08rem', color: '#065f46', borderBottom: '2px solid #d1fae5', paddingBottom: '0.4rem', marginBottom: '0.75rem' }}>
-                    參、會議重要決議事項
-                  </h3>
-                  <div
-                    style={{
-                      background: '#ecfdf5',
-                      border: '1px solid #a7f3d0',
-                      borderRadius: '12px',
-                      padding: '1rem 1.25rem'
-                    }}
-                  >
-                    <ol style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.7, color: '#064e3b', fontWeight: 600, fontSize: '0.94rem' }}>
-                      {activeMeeting.resolutions.map((res, idx) => (
-                        <li key={idx} style={{ marginBottom: '0.35rem' }}>
-                          <HighlightText text={res} keyword={searchQuery} />
-                        </li>
+                  {/* 會議討論內容 */}
+                  <div style={{ marginBottom: '1.4rem' }}>
+                    <h3 style={{ fontSize: '1.08rem', color: '#1e3a8a', borderBottom: '2px solid #dbeafe', paddingBottom: '0.4rem', marginBottom: '0.85rem' }}>
+                      貳、會議討論內容與紀錄
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      {(activeMeeting.discussionSections || []).map((sec, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            background: '#ffffff',
+                            border: '1px solid #e2e8f0',
+                            borderRadius: '12px',
+                            padding: '1rem 1.15rem'
+                          }}
+                        >
+                          <h4 style={{ margin: '0 0 0.6rem 0', fontSize: '1rem', color: '#0f172a' }}>
+                            <HighlightText text={sec.heading} keyword={searchQuery} />
+                          </h4>
+                          <ul style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.7, color: '#334155', fontSize: '0.93rem' }}>
+                            {(sec.bullets || []).map((b, bIdx) => (
+                              <li key={bIdx} style={{ marginBottom: '0.35rem' }}>
+                                <HighlightText text={b} keyword={searchQuery} />
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       ))}
-                    </ol>
+                    </div>
                   </div>
-                </div>
-              )}
 
-              {/* 待辦追蹤事項 (Action Items) */}
-              {activeMeeting.actionItems && activeMeeting.actionItems.length > 0 && (
-                <div style={{ marginBottom: '1.4rem' }}>
-                  <h3 style={{ fontSize: '1.08rem', color: '#5b21b6', borderBottom: '2px solid #ede9fe', paddingBottom: '0.4rem', marginBottom: '0.75rem' }}>
-                    肆、待辦追蹤事項 (Action Items)
-                  </h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
-                    {activeMeeting.actionItems.map((item, idx) => (
+                  {/* 會議決議事項 */}
+                  {activeMeeting.resolutions && activeMeeting.resolutions.length > 0 && (
+                    <div style={{ marginBottom: '1.4rem' }}>
+                      <h3 style={{ fontSize: '1.08rem', color: '#065f46', borderBottom: '2px solid #d1fae5', paddingBottom: '0.4rem', marginBottom: '0.75rem' }}>
+                        參、會議重要決議事項
+                      </h3>
                       <div
-                        key={item.id || idx}
                         style={{
-                          background: '#ffffff',
-                          border: '1px solid #e2e8f0',
-                          borderRadius: '10px',
-                          padding: '0.75rem 1rem',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          flexWrap: 'wrap',
-                          gap: '0.5rem'
+                          background: '#ecfdf5',
+                          border: '1px solid #a7f3d0',
+                          borderRadius: '12px',
+                          padding: '1rem 1.25rem'
                         }}
                       >
-                        <div style={{ flex: 1, minWidth: '220px' }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.92rem', color: '#0f172a' }}>
-                            {idx + 1}. <HighlightText text={item.task} keyword={searchQuery} />
-                          </div>
-                          <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.2rem' }}>
-                            負責人員：<strong><HighlightText text={item.assignee} keyword={searchQuery} /></strong> ｜ 預計完成日：{item.dueDate || '—'}
-                          </div>
-                        </div>
-                        <span
-                          className="badge"
-                          style={{
-                            background:
-                              item.status === '已完成' ? '#d1fae5' : item.status === '進行中' ? '#dbeafe' : '#f1f5f9',
-                            color:
-                              item.status === '已完成' ? '#065f46' : item.status === '進行中' ? '#1e40af' : '#475569'
-                          }}
-                        >
-                          {item.status}
-                        </span>
+                        <ol style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.7, color: '#064e3b', fontWeight: 600, fontSize: '0.94rem' }}>
+                          {activeMeeting.resolutions.map((res, idx) => (
+                            <li key={idx} style={{ marginBottom: '0.35rem' }}>
+                              <HighlightText text={res} keyword={searchQuery} />
+                            </li>
+                          ))}
+                        </ol>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                    </div>
+                  )}
 
-              {/* 【E】相關照片與佐證附件檔案紀錄（支援圖片放大預覽 + PDF/Word/Excel/PPTX/CSV 檔案下載） */}
-              {activeMeeting.attachments && activeMeeting.attachments.length > 0 && (
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <h3 style={{ fontSize: '1.08rem', color: '#1e3a8a', borderBottom: '2px solid #dbeafe', paddingBottom: '0.4rem', marginBottom: '0.85rem' }}>
-                    伍、相關照片與佐證附件檔案紀錄（共 {activeMeeting.attachments.length} 件）
-                  </h3>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
-                      gap: '0.85rem'
-                    }}
-                  >
-                    {activeMeeting.attachments.map((att, idx) => {
-                      const isImg = isImageAttachment(att);
-                      const fileBadge = getFileTypeBadge(att);
-                      return (
-                        <div
-                          key={att.id || idx}
-                          style={{
-                            border: '1px solid #cbd5e1',
-                            borderRadius: '12px',
-                            overflow: 'hidden',
-                            background: '#ffffff',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'space-between'
-                          }}
-                        >
-                          {isImg ? (
-                            <div
-                              onClick={() => setPreviewImage(att)}
-                              style={{
-                                height: '160px',
-                                overflow: 'hidden',
-                                background: '#f8fafc',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer'
-                              }}
-                              title="點擊放大預覽圖片"
-                            >
-                              <img
-                                src={att.url}
-                                alt={att.title}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                              />
-                            </div>
-                          ) : (
-                            <div
-                              style={{
-                                height: '130px',
-                                background: '#f8fafc',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: '0.75rem',
-                                gap: '0.45rem'
-                              }}
-                            >
-                              <span
-                                className="badge"
-                                style={{
-                                  background: fileBadge.bg,
-                                  color: fileBadge.color,
-                                  fontSize: '0.84rem',
-                                  padding: '0.35rem 0.75rem'
-                                }}
-                              >
-                                {fileBadge.label}
-                              </span>
-                              <div style={{ fontSize: '0.78rem', color: '#64748b', textAlign: 'center', wordBreak: 'break-all' }}>
-                                {att.fileName || att.title}
+                  {/* 待辦追蹤事項 (Action Items) */}
+                  {activeMeeting.actionItems && activeMeeting.actionItems.length > 0 && (
+                    <div style={{ marginBottom: '1.4rem' }}>
+                      <h3 style={{ fontSize: '1.08rem', color: '#5b21b6', borderBottom: '2px solid #ede9fe', paddingBottom: '0.4rem', marginBottom: '0.75rem' }}>
+                        肆、待辦追蹤事項 (Action Items)
+                      </h3>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                        {activeMeeting.actionItems.map((item, idx) => (
+                          <div
+                            key={item.id || idx}
+                            style={{
+                              background: '#ffffff',
+                              border: '1px solid #e2e8f0',
+                              borderRadius: '10px',
+                              padding: '0.75rem 1rem',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              flexWrap: 'wrap',
+                              gap: '0.5rem'
+                            }}
+                          >
+                            <div style={{ flex: 1, minWidth: '220px' }}>
+                              <div style={{ fontWeight: 600, fontSize: '0.92rem', color: '#0f172a' }}>
+                                {idx + 1}. <HighlightText text={item.task} keyword={searchQuery} />
+                              </div>
+                              <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.2rem' }}>
+                                負責人員：<strong><HighlightText text={item.assignee} keyword={searchQuery} /></strong> ｜ 預計完成日：{item.dueDate || '—'}
                               </div>
                             </div>
-                          )}
-
-                          <div style={{ padding: '0.6rem 0.75rem', borderTop: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                            <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#1e293b', wordBreak: 'break-word' }}>
-                              {att.title}
-                            </div>
-                            <div className="no-print" style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
-                              {isImg && (
-                                <button
-                                  type="button"
-                                  onClick={() => setPreviewImage(att)}
-                                  className="btn btn-secondary"
-                                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
-                                >
-                                  🔍 放大檢視
-                                </button>
-                              )}
-                              <a
-                                href={att.url}
-                                download={att.fileName || att.title || `附件_${idx + 1}`}
-                                className="btn btn-secondary"
-                                style={{
-                                  padding: '0.25rem 0.65rem',
-                                  fontSize: '0.75rem',
-                                  textDecoration: 'none',
-                                  background: '#eff6ff',
-                                  color: '#1d4ed8',
-                                  borderColor: '#bfdbfe'
-                                }}
-                              >
-                                ⬇️ 下載檔案
-                              </a>
-                            </div>
+                            <span
+                              className="badge"
+                              style={{
+                                background:
+                                  item.status === '已完成' ? '#d1fae5' : item.status === '進行中' ? '#dbeafe' : '#f1f5f9',
+                                color:
+                                  item.status === '已完成' ? '#065f46' : item.status === '進行中' ? '#1e40af' : '#475569'
+                              }}
+                            >
+                              {item.status}
+                            </span>
                           </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 【E】相關照片與佐證附件檔案紀錄（支援圖片放大預覽 + PDF/Word/Excel/PPTX/CSV 檔案下載） */}
+                  {activeMeeting.attachments && activeMeeting.attachments.length > 0 && (
+                    <div style={{ marginBottom: '1.5rem' }}>
+                      <h3 style={{ fontSize: '1.08rem', color: '#1e3a8a', borderBottom: '2px solid #dbeafe', paddingBottom: '0.4rem', marginBottom: '0.85rem' }}>
+                        伍、相關照片與佐證附件檔案紀錄（共 {activeMeeting.attachments.length} 件）
+                      </h3>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+                          gap: '0.85rem'
+                        }}
+                      >
+                        {activeMeeting.attachments.map((att, idx) => {
+                          const isImg = isImageAttachment(att);
+                          const fileBadge = getFileTypeBadge(att);
+                          return (
+                            <div
+                              key={att.id || idx}
+                              style={{
+                                border: '1px solid #cbd5e1',
+                                borderRadius: '12px',
+                                overflow: 'hidden',
+                                background: '#ffffff',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'space-between'
+                              }}
+                            >
+                              {isImg ? (
+                                <div
+                                  onClick={() => setPreviewImage(att)}
+                                  style={{
+                                    height: '160px',
+                                    overflow: 'hidden',
+                                    background: '#f8fafc',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    cursor: 'pointer'
+                                  }}
+                                  title="點擊放大預覽圖片"
+                                >
+                                  <img
+                                    src={att.url}
+                                    alt={att.title}
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                  />
+                                </div>
+                              ) : (
+                                <div
+                                  style={{
+                                    height: '130px',
+                                    background: '#f8fafc',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: '0.75rem',
+                                    gap: '0.45rem'
+                                  }}
+                                >
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      background: fileBadge.bg,
+                                      color: fileBadge.color,
+                                      fontSize: '0.84rem',
+                                      padding: '0.35rem 0.75rem'
+                                    }}
+                                  >
+                                    {fileBadge.label}
+                                  </span>
+                                  <div style={{ fontSize: '0.78rem', color: '#64748b', textAlign: 'center', wordBreak: 'break-all' }}>
+                                    {att.fileName || att.title}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div style={{ padding: '0.6rem 0.75rem', borderTop: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#1e293b', wordBreak: 'break-word' }}>
+                                  {att.title}
+                                </div>
+                                <div className="no-print" style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                                  {isImg && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewImage(att)}
+                                      className="btn btn-secondary"
+                                      style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+                                    >
+                                      🔍 放大檢視
+                                    </button>
+                                  )}
+                                  <a
+                                    href={att.url}
+                                    download={att.fileName || att.title || `附件_${idx + 1}`}
+                                    className="btn btn-secondary"
+                                    style={{
+                                      padding: '0.25rem 0.65rem',
+                                      fontSize: '0.75rem',
+                                      textDecoration: 'none',
+                                      background: '#eff6ff',
+                                      color: '#1d4ed8',
+                                      borderColor: '#bfdbfe'
+                                    }}
+                                  >
+                                    ⬇️ 下載檔案
+                                  </a>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ==================== STEP 4 技術主任已公布後：同仁手機查閱簽認與手寫電子簽名專區 ==================== */}
+                  {(!activeMeeting.status || activeMeeting.status === 'published') && (
+                    <div
+                      className="no-print"
+                      style={{
+                        background: isCurrentMeetingSigned ? '#ecfdf5' : '#eff6ff',
+                        border: isCurrentMeetingSigned ? '2px solid #10b981' : '2px solid #3b82f6',
+                        borderRadius: '14px',
+                        padding: '1.25rem',
+                        marginBottom: '1.4rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: '1.1rem', color: isCurrentMeetingSigned ? '#065f46' : '#1e3a8a' }}>
+                            {isCurrentMeetingSigned
+                              ? `✅ ${currentUser.name}，您已簽核過本場會議紀錄（已歸檔於歷史紀錄專區）`
+                              : `✍️ ${currentUser.name}，請確認簽閱本場已公布之會議紀錄（簽完即自動移入歷史紀錄專區）`}
+                          </h3>
+                          {mySignatureRecord ? (
+                            <div style={{ fontSize: '0.85rem', color: '#047857', marginTop: '0.3rem' }}>
+                              簽核方式：<strong>{mySignatureRecord.method}</strong> ｜ 時間：
+                              {new Date(mySignatureRecord.signedAt).toLocaleString('zh-TW')}
+                              {mySignatureRecord.comment ? ` ｜ 備註：${mySignatureRecord.comment}` : ''}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: '0.85rem', color: '#475569', marginTop: '0.3rem' }}>
+                              點擊「一鍵快速簽認（已閱）」或使用「手寫電子簽名板」完成簽核後，本紀錄即自動從首頁收進歷史紀錄專區。
+                            </div>
+                          )}
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
+
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          {!isCurrentMeetingSigned && (
+                            <button
+                              type="button"
+                              onClick={() => handleSignMeeting(activeMeeting.id, 'sign', null, '已詳閱並確認會議紀錄')}
+                              className="btn btn-success"
+                              disabled={signingLoading}
+                            >
+                              <Check size={18} /> ⚡ 一鍵快速簽認（已閱）
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSigPadMode('sign');
+                              setShowSigPad(!showSigPad);
+                            }}
+                            className="btn"
+                            style={{ background: '#1e3a8a' }}
+                          >
+                            <PenTool size={17} /> {showSigPad ? '收起簽名板' : isCurrentMeetingSigned ? '重新手寫簽名 / 補充意見' : '開啟手寫電子簽名板'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {mySignatureRecord?.signatureDataUrl && (
+                        <div style={{ marginTop: '0.85rem', background: '#ffffff', padding: '0.6rem 1rem', borderRadius: '10px', display: 'inline-block', border: '1px solid #a7f3d0' }}>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.25rem' }}>已存檔之手寫電子簽名：</div>
+                          <img
+                            src={mySignatureRecord.signatureDataUrl}
+                            alt="手寫簽名"
+                            style={{ height: '54px', objectFit: 'contain' }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
 
-              {/* ==================== 同仁手機簽到與手寫電子簽名專區 ==================== */}
-              <div
-                className="no-print"
-                style={{
-                  background: isCurrentMeetingSigned ? '#ecfdf5' : '#eff6ff',
-                  border: isCurrentMeetingSigned ? '2px solid #10b981' : '2px solid #3b82f6',
-                  borderRadius: '14px',
-                  padding: '1.25rem',
-                  marginBottom: '1.4rem'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem', color: isCurrentMeetingSigned ? '#065f46' : '#1e3a8a' }}>
-                      {isCurrentMeetingSigned
-                        ? `✅ ${currentUser.name}，您已簽核過本場會議紀錄（已歸檔於歷史紀錄專區）`
-                        : `✍️ ${currentUser.name}，請確認簽閱本場會議紀錄（簽完即自動移入歷史紀錄專區）`}
-                    </h3>
-                    {mySignatureRecord ? (
-                      <div style={{ fontSize: '0.85rem', color: '#047857', marginTop: '0.3rem' }}>
-                        簽核方式：<strong>{mySignatureRecord.method}</strong> ｜ 時間：
-                        {new Date(mySignatureRecord.signedAt).toLocaleString('zh-TW')}
-                        {mySignatureRecord.comment ? ` ｜ 備註：${mySignatureRecord.comment}` : ''}
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: '0.85rem', color: '#475569', marginTop: '0.3rem' }}>
-                        點擊「一鍵快速簽認（已閱）」或使用「手寫電子簽名板」完成簽核後，本紀錄即自動從首頁收進歷史紀錄專區。
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    {!isCurrentMeetingSigned && (
-                      <button
-                        type="button"
-                        onClick={() => handleSignMeeting(activeMeeting.id, 'sign', null, '已詳閱並確認會議紀錄')}
-                        className="btn btn-success"
-                        disabled={signingLoading}
-                      >
-                        <Check size={18} /> ⚡ 一鍵快速簽認（已閱）
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setShowSigPad(!showSigPad)}
-                      className="btn"
-                      style={{ background: '#1e3a8a' }}
-                    >
-                      <PenTool size={17} /> {showSigPad ? '收起簽名板' : isCurrentMeetingSigned ? '重新手寫簽名 / 補充意見' : '開啟手寫電子簽名板'}
-                    </button>
-                  </div>
-                </div>
-
-                {mySignatureRecord?.signatureDataUrl && (
-                  <div style={{ marginTop: '0.85rem', background: '#ffffff', padding: '0.6rem 1rem', borderRadius: '10px', display: 'inline-block', border: '1px solid #a7f3d0' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.25rem' }}>已存檔之手寫電子簽名：</div>
-                    <img
-                      src={mySignatureRecord.signatureDataUrl}
-                      alt="手寫簽名"
-                      style={{ height: '54px', objectFit: 'contain' }}
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* 彈出式手寫電子簽名板視窗（筆電滑鼠 / 觸控板 / 手機觸控皆可立即簽名，不需往下捲動尋找） */}
+              {/* 彈出式手寫電子簽名板視窗（支援「現場出席簽到 checkin」與「會後查閱簽認 sign」） */}
               {showSigPad && (
                 <div
                   className="no-print animate-fade-in"
@@ -2981,7 +3736,10 @@ export default function HomePage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                       <div>
                         <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#1e3a8a', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <PenTool size={20} /> ✍️ 手寫電子簽名板（{currentUser.name}）
+                          <PenTool size={20} />{' '}
+                          {sigPadMode === 'checkin'
+                            ? `📲 現場出席簽到手寫簽名板（${currentUser.name}）`
+                            : `✍️ 會議紀錄查閱手寫簽名板（${currentUser.name}）`}
                         </h3>
                         <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.2rem' }}>
                           會議：{activeMeeting.title}
@@ -2998,10 +3756,12 @@ export default function HomePage() {
                     </div>
 
                     <div style={{ marginBottom: '0.85rem' }}>
-                      <label style={{ fontSize: '0.85rem' }}>💬 簽閱意見或回饋（選填，預設為「已詳閱會議紀錄」）：</label>
+                      <label style={{ fontSize: '0.85rem' }}>
+                        💬 {sigPadMode === 'checkin' ? '簽到備註（選填，預設為「現場出席簽到」）' : '簽閱意見或回饋（選填，預設為「已詳閱會議紀錄」）'}：
+                      </label>
                       <input
                         type="text"
-                        placeholder="例如：已閱，配合辦理相關事項..."
+                        placeholder={sigPadMode === 'checkin' ? '例如：準時出席...' : '例如：已閱，配合辦理相關事項...'}
                         value={signComment}
                         onChange={(e) => setSignComment(e.target.value)}
                       />
@@ -3082,67 +3842,90 @@ export default function HomePage() {
                           if (hasDrawnSignature && canvasRef.current) {
                             sigUrl = canvasRef.current.toDataURL('image/png');
                           }
-                          handleSignMeeting(activeMeeting.id, 'sign', sigUrl, signComment || '已詳閱會議紀錄');
+                          handleSignMeeting(
+                            activeMeeting.id,
+                            sigPadMode,
+                            sigUrl,
+                            signComment || (sigPadMode === 'checkin' ? '現場出席簽到' : '已詳閱會議紀錄')
+                          );
                         }}
                         className="btn btn-success"
                         style={{ padding: '0.65rem 1.35rem', fontSize: '0.95rem' }}
                       >
-                        <CheckCircle2 size={18} /> 儲存手寫簽名並移入歷史專區
+                        <CheckCircle2 size={18} />{' '}
+                        {sigPadMode === 'checkin' ? '儲存手寫簽名並完成現場簽到' : '儲存手寫簽名並移入歷史專區'}
                       </button>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* 已簽閱人員名單一覽 */}
+              {/* 已簽到 / 已簽閱人員名單一覽 */}
               <div>
                 <h3 style={{ fontSize: '1.05rem', color: '#1e3a8a', borderBottom: '2px solid #dbeafe', paddingBottom: '0.4rem', marginBottom: '0.75rem' }}>
-                  陸、全科同仁線上簽到與簽閱紀錄（已簽核 {Object.keys(activeMeeting.signatures || {}).length} 人）
+                  陸、全科同仁現場簽到與紀錄簽閱明細（現場簽到 {Object.keys(activeMeeting.checkins || {}).length} 人 ／ 會後簽閱 {Object.keys(activeMeeting.signatures || {}).length} 人）
                 </h3>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-                    gap: '0.6rem'
-                  }}
-                >
-                  {Object.values(activeMeeting.signatures || {}).map((sig, idx) => (
+                {(() => {
+                  const combinedRecords = [
+                    ...Object.values(activeMeeting.signatures || {}).map((s) => ({ ...s, recordType: 'sign' })),
+                    ...Object.values(activeMeeting.checkins || {})
+                      .filter((c) => !activeMeeting.signatures?.[c.name])
+                      .map((c) => ({ ...c, signedAt: c.checkedInAt, recordType: 'checkin' }))
+                  ];
+                  return (
                     <div
-                      key={idx}
                       style={{
-                        background: '#ffffff',
-                        border: '1px solid #cbd5e1',
-                        borderRadius: '10px',
-                        padding: '0.65rem 0.85rem',
-                        fontSize: '0.84rem'
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                        gap: '0.6rem'
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <strong style={{ fontSize: '0.92rem', color: '#0f172a' }}>{sig.name}</strong>
-                        <span className="badge" style={{ background: '#d1fae5', color: '#065f46', fontSize: '0.72rem' }}>
-                          {sig.method || '已簽閱'}
-                        </span>
-                      </div>
-                      {sig.signatureDataUrl && (
-                        <div style={{ marginTop: '0.35rem', background: '#f8fafc', padding: '0.25rem', borderRadius: '6px', textAlign: 'center' }}>
-                          <img
-                            src={sig.signatureDataUrl}
-                            alt={`${sig.name}簽名`}
-                            style={{ height: '38px', objectFit: 'contain' }}
-                          />
+                      {combinedRecords.map((sig, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            background: '#ffffff',
+                            border: '1px solid #cbd5e1',
+                            borderRadius: '10px',
+                            padding: '0.65rem 0.85rem',
+                            fontSize: '0.84rem'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <strong style={{ fontSize: '0.92rem', color: '#0f172a' }}>{sig.name}</strong>
+                            <span
+                              className="badge"
+                              style={{
+                                background: sig.recordType === 'checkin' ? '#dcfce7' : '#d1fae5',
+                                color: sig.recordType === 'checkin' ? '#15803d' : '#065f46',
+                                fontSize: '0.72rem'
+                              }}
+                            >
+                              {sig.method || '已簽閱'}
+                            </span>
+                          </div>
+                          {sig.signatureDataUrl && (
+                            <div style={{ marginTop: '0.35rem', background: '#f8fafc', padding: '0.25rem', borderRadius: '6px', textAlign: 'center' }}>
+                              <img
+                                src={sig.signatureDataUrl}
+                                alt={`${sig.name}簽名`}
+                                style={{ height: '38px', objectFit: 'contain' }}
+                              />
+                            </div>
+                          )}
+                          {sig.comment && (
+                            <div style={{ color: '#334155', marginTop: '0.25rem', fontSize: '0.8rem' }}>
+                              💬 {sig.comment}
+                            </div>
+                          )}
+                          <div style={{ color: '#94a3b8', fontSize: '0.74rem', marginTop: '0.2rem' }}>
+                            🕒 {sig.signedAt ? new Date(sig.signedAt).toLocaleString('zh-TW') : ''}
+                          </div>
                         </div>
-                      )}
-                      {sig.comment && (
-                        <div style={{ color: '#334155', marginTop: '0.25rem', fontSize: '0.8rem' }}>
-                          💬 {sig.comment}
-                        </div>
-                      )}
-                      <div style={{ color: '#94a3b8', fontSize: '0.74rem', marginTop: '0.2rem' }}>
-                        🕒 {sig.signedAt ? new Date(sig.signedAt).toLocaleString('zh-TW') : ''}
-                      </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  );
+                })()}
               </div>
 
               {/* 底部返回清單按鈕 */}
@@ -3195,24 +3978,72 @@ export default function HomePage() {
               border: '2px solid #059669'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.1rem', paddingBottom: '0.8rem', borderBottom: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem', paddingBottom: '0.8rem', borderBottom: '1px solid #e2e8f0' }}>
               <div>
-                <span className="badge" style={{ background: '#d1fae5', color: '#065f46', marginBottom: '0.25rem' }}>
-                  發起人員：{currentUser?.name}（{currentUser?.title}）
+                <span
+                  className="badge"
+                  style={{
+                    background: modalMode === 'initiate' ? '#dcfce7' : staffDraftMeeting.status === 'returned' ? '#ffedd5' : '#dbeafe',
+                    color: modalMode === 'initiate' ? '#15803d' : staffDraftMeeting.status === 'returned' ? '#c2410c' : '#1e40af',
+                    marginBottom: '0.25rem'
+                  }}
+                >
+                  {modalMode === 'initiate'
+                    ? `STEP 1・發起人員：${currentUser?.name}（${currentUser?.title}）`
+                    : staffDraftMeeting.status === 'returned'
+                    ? `🟠 技術主任退回修改（已完整保留原維護資料）｜記錄人：${staffDraftMeeting.recorder}`
+                    : `STEP 2・執行會議紀錄｜記錄人：${staffDraftMeeting.recorder || currentUser?.name}`}
                 </span>
-                <h2 style={{ margin: 0, fontSize: '1.3rem', color: '#0f172a' }}>
-                  {staffDraftMeeting.id ? `✏️ 編輯會議紀錄：${staffDraftMeeting.title}` : '➕ 發起新會議紀錄（含語音轉會議紀錄）'}
+                <h2 style={{ margin: 0, fontSize: '1.28rem', color: '#0f172a' }}>
+                  {modalMode === 'initiate'
+                    ? '➕ 發起新會議（開啟現場出席簽到）'
+                    : staffDraftMeeting.status === 'returned'
+                    ? `✏️ 修改會議紀錄資料：${staffDraftMeeting.title}`
+                    : `📝 執行會議紀錄（語音轉譯 & 資料登錄）：${staffDraftMeeting.title}`}
                 </h2>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={handleSaveStaffMeeting}
-                  disabled={savingStaffMeeting}
-                  className="btn btn-success"
-                >
-                  <Save size={16} /> {savingStaffMeeting ? '儲存中...' : staffDraftMeeting.id ? '儲存會議修改' : '🚀 確認發起會議紀錄'}
-                </button>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {modalMode === 'initiate' ? (
+                  <button
+                    type="button"
+                    onClick={(e) => handleSaveStaffMeeting(e, 'in_progress')}
+                    disabled={savingStaffMeeting}
+                    className="btn btn-success"
+                  >
+                    <Save size={16} /> {savingStaffMeeting ? '發起中...' : '🚀 確認發起會議（開放現場簽到）'}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) =>
+                        handleSaveStaffMeeting(
+                          e,
+                          staffDraftMeeting.status === 'returned'
+                            ? 'returned'
+                            : staffDraftMeeting.status === 'published'
+                            ? 'published'
+                            : 'in_progress'
+                        )
+                      }
+                      disabled={savingStaffMeeting}
+                      className="btn"
+                      style={{ background: '#2563eb' }}
+                    >
+                      <Save size={16} /> {savingStaffMeeting ? '儲存中...' : '💾 暫存紀錄資料（稍後繼續）'}
+                    </button>
+                    {staffDraftMeeting.status !== 'published' && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleSaveStaffMeeting(e, 'pending_review')}
+                        disabled={savingStaffMeeting}
+                        className="btn btn-purple"
+                      >
+                        <CheckCircle2 size={16} /> 🏁 結束會議（完成登錄送技術主任確認）
+                      </button>
+                    )}
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
@@ -3223,7 +4054,47 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* 🎙️ 現場語音 / 手寫稿 / 口語重點一鍵轉結構化會議紀錄 */}
+            {modalMode === 'initiate' && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.85rem 1rem',
+                  background: '#f0fdf4',
+                  border: '1.5px solid #86efac',
+                  borderRadius: '10px',
+                  fontSize: '0.86rem',
+                  color: '#166534',
+                  lineHeight: 1.55
+                }}
+              >
+                <strong>💡 會議標準流程說明：</strong>
+                <br />
+                ① 先於下方填寫會議基本資訊並按「<strong>🚀 確認發起會議（開放現場簽到）</strong>」 ➔ ② 發起後與會同仁即可先點選該場會議進行<strong>現場簽到</strong>，記錄人亦從列表點選該會議進入「<strong>📝 執行會議紀錄</strong>」 ➔ ③ 完成會議後按「<strong>🏁 結束會議</strong>」結束資料登錄 ➔ ④ 待<strong>技術主任確認無誤按「公布」</strong>後，其他人員方能查閱。
+              </div>
+            )}
+
+            {modalMode === 'record' && staffDraftMeeting.status === 'returned' && staffDraftMeeting.returnReason && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.85rem 1rem',
+                  background: '#fff7ed',
+                  border: '2px solid #ea580c',
+                  borderRadius: '10px',
+                  fontSize: '0.88rem',
+                  color: '#9a3412',
+                  fontWeight: 700
+                }}
+              >
+                🟠 技術主任（{staffDraftMeeting.returnedBy || '林宜蓁'}）退回修改說明：{staffDraftMeeting.returnReason}
+                <div style={{ fontSize: '0.8rem', fontWeight: 500, marginTop: '0.2rem' }}>
+                  （下方已完整保留您先前維護的所有資料內容，請修改後按右上角或底部「🏁 結束會議（完成登錄送技術主任確認）」）
+                </div>
+              </div>
+            )}
+
+            {/* 🎙️ 現場語音 / 手寫稿 / 口語重點一鍵轉結構化會議紀錄（僅於 STEP 2「點選進入執行會議紀錄」時顯示） */}
+            {modalMode === 'record' && (
             <div className="card" style={{ marginBottom: '1.15rem', background: '#faf5ff', borderColor: '#d8b4fe' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.6rem' }}>
                 <div style={{ fontWeight: 700, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -3589,6 +4460,7 @@ export default function HomePage() {
                 }}
               />
             </div>
+            )}
 
             {/* 【D】一鍵帶入上一場同類別會議範本（或任選過往會議作為範本） */}
             <div
@@ -3711,23 +4583,23 @@ export default function HomePage() {
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>發起後狀態 *</label>
-                <select
-                  value={staffDraftMeeting.isArchived ? 'ARCHIVED' : staffDraftMeeting.status}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === 'ARCHIVED') {
-                      setStaffDraftMeeting({ ...staffDraftMeeting, status: 'published', isArchived: true });
-                    } else {
-                      setStaffDraftMeeting({ ...staffDraftMeeting, status: v, isArchived: false });
-                    }
-                  }}
-                >
-                  <option value="published">✅ 立即開放全科同仁於首頁簽閱</option>
-                  <option value="pending_chair">⏳ 呈報會議主席覆核</option>
-                  <option value="pending_director">⏳ 呈報科主任核准</option>
-                  <option value="ARCHIVED">📦 直接歸檔至「歷史紀錄專區」</option>
-                </select>
+                <label>目前流程階段</label>
+                <input
+                  type="text"
+                  disabled
+                  value={
+                    modalMode === 'initiate'
+                      ? '🟢 發起會議（開放現場出席簽到）'
+                      : staffDraftMeeting.status === 'returned'
+                      ? '🟠 技術主任退回修改中（保留原維護資料）'
+                      : staffDraftMeeting.status === 'pending_review'
+                      ? '⏳ 待技術主任確認公布'
+                      : staffDraftMeeting.status === 'published'
+                      ? '✅ 技術主任已確認公布'
+                      : '🟢 會議進行中（執行會議紀錄）'
+                  }
+                  style={{ background: '#f8fafc', fontWeight: 700, color: '#1e3a8a' }}
+                />
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
@@ -4029,274 +4901,450 @@ export default function HomePage() {
               );
             })()}
 
-            {/* 議程主題 */}
-            <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <label style={{ margin: 0 }}>📌 壹、會議議程主題</label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setStaffDraftMeeting({
-                      ...staffDraftMeeting,
-                      agendaItems: [...(staffDraftMeeting.agendaItems || []), `${(staffDraftMeeting.agendaItems || []).length + 1}. 新增議程主題`]
-                    })
-                  }
-                  className="btn btn-secondary"
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
-                >
-                  <Plus size={14} /> 新增議程列
-                </button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                {(staffDraftMeeting.agendaItems || []).map((ag, idx) => (
-                  <div key={idx} style={{ display: 'flex', gap: '0.4rem' }}>
-                    <input
-                      type="text"
-                      value={ag}
-                      onChange={(e) => {
-                        const list = [...staffDraftMeeting.agendaItems];
-                        list[idx] = e.target.value;
-                        setStaffDraftMeeting({ ...staffDraftMeeting, agendaItems: list });
-                      }}
-                    />
+            {modalMode === 'record' && (
+              <>
+                {/* 議程主題 */}
+                <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <label style={{ margin: 0 }}>📌 壹、會議議程主題</label>
                     <button
                       type="button"
-                      onClick={() => {
-                        const list = staffDraftMeeting.agendaItems.filter((_, i) => i !== idx);
-                        setStaffDraftMeeting({ ...staffDraftMeeting, agendaItems: list });
-                      }}
-                      className="btn btn-danger"
-                      style={{ padding: '0.35rem 0.6rem' }}
+                      onClick={() =>
+                        setStaffDraftMeeting({
+                          ...staffDraftMeeting,
+                          agendaItems: [...(staffDraftMeeting.agendaItems || []), `${(staffDraftMeeting.agendaItems || []).length + 1}. 新增議程主題`]
+                        })
+                      }
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
                     >
-                      <Trash2 size={14} />
+                      <Plus size={14} /> 新增議程列
                     </button>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 討論事項段落 */}
-            <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-                <label style={{ margin: 0 }}>📝 貳、討論事項內容</label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setStaffDraftMeeting({
-                      ...staffDraftMeeting,
-                      discussionSections: [
-                        ...(staffDraftMeeting.discussionSections || []),
-                        { heading: `${(staffDraftMeeting.discussionSections || []).length + 1}. 新增討論主題`, bullets: [''] }
-                      ]
-                    })
-                  }
-                  className="btn btn-secondary"
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
-                >
-                  <Plus size={14} /> 新增討論段落
-                </button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {(staffDraftMeeting.discussionSections || []).map((sec, sIdx) => (
-                  <div key={sIdx} style={{ background: '#f8fafc', padding: '0.75rem', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
-                    <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.45rem' }}>
-                      <input
-                        type="text"
-                        value={sec.heading}
-                        onChange={(e) => {
-                          const secs = [...staffDraftMeeting.discussionSections];
-                          secs[sIdx] = { ...secs[sIdx], heading: e.target.value };
-                          setStaffDraftMeeting({ ...staffDraftMeeting, discussionSections: secs });
-                        }}
-                        placeholder="段落標題（例如：1. 臨床業務討論）"
-                        style={{ fontWeight: 700 }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const secs = staffDraftMeeting.discussionSections.filter((_, i) => i !== sIdx);
-                          setStaffDraftMeeting({ ...staffDraftMeeting, discussionSections: secs });
-                        }}
-                        className="btn btn-danger"
-                        style={{ padding: '0.35rem 0.6rem' }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                    <textarea
-                      rows={3}
-                      value={(sec.bullets || []).join('\n')}
-                      onChange={(e) => {
-                        const secs = [...staffDraftMeeting.discussionSections];
-                        secs[sIdx] = { ...secs[sIdx], bullets: e.target.value.split('\n') };
-                        setStaffDraftMeeting({ ...staffDraftMeeting, discussionSections: secs });
-                      }}
-                      placeholder="請輸入本段討論細節（換行即自動分列條目）..."
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 決議與追蹤事項 */}
-            <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <label style={{ margin: 0 }}>✅ 參、決議與執行事項</label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setStaffDraftMeeting({
-                      ...staffDraftMeeting,
-                      resolutions: [...(staffDraftMeeting.resolutions || []), '']
-                    })
-                  }
-                  className="btn btn-secondary"
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
-                >
-                  <Plus size={14} /> 新增決議列
-                </button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                {(staffDraftMeeting.resolutions || []).map((resText, idx) => (
-                  <div key={idx} style={{ display: 'flex', gap: '0.4rem' }}>
-                    <input
-                      type="text"
-                      value={resText}
-                      onChange={(e) => {
-                        const list = [...staffDraftMeeting.resolutions];
-                        list[idx] = e.target.value;
-                        setStaffDraftMeeting({ ...staffDraftMeeting, resolutions: list });
-                      }}
-                      placeholder={`決議事項 ${idx + 1}...`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const list = staffDraftMeeting.resolutions.filter((_, i) => i !== idx);
-                        setStaffDraftMeeting({ ...staffDraftMeeting, resolutions: list });
-                      }}
-                      className="btn btn-danger"
-                      style={{ padding: '0.35rem 0.6rem' }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 【問卷系統連動】本場會議專屬問卷或課後測驗連結（選填） */}
-            <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem', background: '#f0fdfa', borderColor: '#99f6e4' }}>
-              <label style={{ margin: '0 0 0.4rem 0', color: '#0f766e', display: 'block' }}>
-                📝 連動本場會議問卷 / 課後測驗網址（選填，未填則預設使用全科問卷系統網址）
-              </label>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <input
-                  type="text"
-                  value={staffDraftMeeting.surveyTitle || ''}
-                  onChange={(e) => setStaffDraftMeeting({ ...staffDraftMeeting, surveyTitle: e.target.value })}
-                  placeholder="問卷按鈕標題（如：填寫課後滿意度問卷）"
-                  style={{ flex: '1 1 200px' }}
-                />
-                <input
-                  type="url"
-                  value={staffDraftMeeting.surveyUrl || ''}
-                  onChange={(e) => setStaffDraftMeeting({ ...staffDraftMeeting, surveyUrl: e.target.value })}
-                  placeholder="貼上您的問卷系統網址（如 http://localhost:3001 或 Google表單 / 自製問卷網址）..."
-                  style={{ flex: '2 1 320px' }}
-                />
-              </div>
-            </div>
-
-            {/* 【E】會議現場照片與佐證文件檔案上傳（支援圖片、PDF、Word、Excel、PPTX、CSV） */}
-            <div className="card" style={{ marginBottom: '1.2rem', padding: '0.9rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <label style={{ margin: 0 }}>
-                  📎 會議現場照片或 PDF / Word / Excel / PPTX 佐證附件（選填，已附加 {(staffDraftMeeting.attachments || []).length} 件）
-                </label>
-                <label className="btn btn-secondary" style={{ margin: 0, padding: '0.38rem 0.85rem', fontSize: '0.8rem', cursor: 'pointer', background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd' }}>
-                  <Upload size={14} /> 上傳照片或 PDF/Word/Excel 檔案
-                  <input
-                    type="file"
-                    accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt"
-                    multiple
-                    onChange={handleStaffUploadPhoto}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-              </div>
-              {(staffDraftMeeting.attachments || []).length > 0 && (
-                <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.65rem' }}>
-                  {staffDraftMeeting.attachments.map((att, idx) => {
-                    const isImg = isImageAttachment(att);
-                    const badge = getFileTypeBadge(att);
-                    return (
-                      <div
-                        key={att.id || idx}
-                        style={{
-                          border: '1px solid #cbd5e1',
-                          borderRadius: '8px',
-                          padding: '0.4rem',
-                          width: '150px',
-                          textAlign: 'center',
-                          background: '#ffffff'
-                        }}
-                      >
-                        {isImg ? (
-                          <img src={att.url} alt={att.title} style={{ width: '100%', height: '68px', objectFit: 'cover', borderRadius: '6px' }} />
-                        ) : (
-                          <div
-                            style={{
-                              height: '68px',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              background: '#f8fafc',
-                              borderRadius: '6px',
-                              padding: '0.25rem'
-                            }}
-                          >
-                            <span className="badge" style={{ background: badge.bg, color: badge.color, fontSize: '0.72rem' }}>
-                              {badge.label}
-                            </span>
-                          </div>
-                        )}
-                        <div style={{ fontSize: '0.73rem', color: '#334155', marginTop: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={att.title}>
-                          {att.title}
-                        </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {(staffDraftMeeting.agendaItems || []).map((ag, idx) => (
+                      <div key={idx} style={{ display: 'flex', gap: '0.4rem' }}>
+                        <input
+                          type="text"
+                          value={ag}
+                          onChange={(e) => {
+                            const list = [...staffDraftMeeting.agendaItems];
+                            list[idx] = e.target.value;
+                            setStaffDraftMeeting({ ...staffDraftMeeting, agendaItems: list });
+                          }}
+                        />
                         <button
                           type="button"
                           onClick={() => {
-                            const next = staffDraftMeeting.attachments.filter((_, i) => i !== idx);
-                            setStaffDraftMeeting({ ...staffDraftMeeting, attachments: next });
+                            const list = staffDraftMeeting.agendaItems.filter((_, i) => i !== idx);
+                            setStaffDraftMeeting({ ...staffDraftMeeting, agendaItems: list });
                           }}
                           className="btn btn-danger"
-                          style={{ padding: '0.15rem 0.45rem', fontSize: '0.7rem', marginTop: '0.25rem' }}
+                          style={{ padding: '0.35rem 0.6rem' }}
                         >
-                          移除
+                          <Trash2 size={14} />
                         </button>
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
-              )}
-            </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem' }}>
+                {/* 討論事項段落 */}
+                <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                    <label style={{ margin: 0 }}>📝 貳、討論事項內容</label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStaffDraftMeeting({
+                          ...staffDraftMeeting,
+                          discussionSections: [
+                            ...(staffDraftMeeting.discussionSections || []),
+                            { heading: `${(staffDraftMeeting.discussionSections || []).length + 1}. 新增討論主題`, bullets: [''] }
+                          ]
+                        })
+                      }
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
+                    >
+                      <Plus size={14} /> 新增討論段落
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {(staffDraftMeeting.discussionSections || []).map((sec, sIdx) => (
+                      <div key={sIdx} style={{ background: '#f8fafc', padding: '0.75rem', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
+                        <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.45rem' }}>
+                          <input
+                            type="text"
+                            value={sec.heading}
+                            onChange={(e) => {
+                              const secs = [...staffDraftMeeting.discussionSections];
+                              secs[sIdx] = { ...secs[sIdx], heading: e.target.value };
+                              setStaffDraftMeeting({ ...staffDraftMeeting, discussionSections: secs });
+                            }}
+                            placeholder="段落標題（例如：1. 臨床業務討論）"
+                            style={{ fontWeight: 700 }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const secs = staffDraftMeeting.discussionSections.filter((_, i) => i !== sIdx);
+                              setStaffDraftMeeting({ ...staffDraftMeeting, discussionSections: secs });
+                            }}
+                            className="btn btn-danger"
+                            style={{ padding: '0.35rem 0.6rem' }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                        <textarea
+                          rows={3}
+                          value={(sec.bullets || []).join('\n')}
+                          onChange={(e) => {
+                            const secs = [...staffDraftMeeting.discussionSections];
+                            secs[sIdx] = { ...secs[sIdx], bullets: e.target.value.split('\n') };
+                            setStaffDraftMeeting({ ...staffDraftMeeting, discussionSections: secs });
+                          }}
+                          placeholder="請輸入本段討論細節（換行即自動分列條目）..."
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 決議與追蹤事項 */}
+                <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <label style={{ margin: 0 }}>✅ 參、決議與執行事項</label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStaffDraftMeeting({
+                          ...staffDraftMeeting,
+                          resolutions: [...(staffDraftMeeting.resolutions || []), '']
+                        })
+                      }
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
+                    >
+                      <Plus size={14} /> 新增決議列
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {(staffDraftMeeting.resolutions || []).map((resText, idx) => (
+                      <div key={idx} style={{ display: 'flex', gap: '0.4rem' }}>
+                        <input
+                          type="text"
+                          value={resText}
+                          onChange={(e) => {
+                            const list = [...staffDraftMeeting.resolutions];
+                            list[idx] = e.target.value;
+                            setStaffDraftMeeting({ ...staffDraftMeeting, resolutions: list });
+                          }}
+                          placeholder={`決議事項 ${idx + 1}...`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const list = staffDraftMeeting.resolutions.filter((_, i) => i !== idx);
+                            setStaffDraftMeeting({ ...staffDraftMeeting, resolutions: list });
+                          }}
+                          className="btn btn-danger"
+                          style={{ padding: '0.35rem 0.6rem' }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 肆、待辦追蹤事項 (Action Items) */}
+                <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <label style={{ margin: 0 }}>📌 肆、待辦追蹤事項 (Action Items，選填)</label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStaffDraftMeeting({
+                          ...staffDraftMeeting,
+                          actionItems: [
+                            ...(staffDraftMeeting.actionItems || []),
+                            {
+                              id: `ACT-${Date.now()}-${(staffDraftMeeting.actionItems || []).length + 1}`,
+                              task: '',
+                              assignee: currentUser?.name || '全科同仁',
+                              dueDate: '',
+                              status: '進行中'
+                            }
+                          ]
+                        })
+                      }
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
+                    >
+                      <Plus size={14} /> 新增待辦追蹤
+                    </button>
+                  </div>
+                  {(staffDraftMeeting.actionItems || []).length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                      {staffDraftMeeting.actionItems.map((act, idx) => (
+                        <div key={act.id || idx} style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            value={act.task || ''}
+                            onChange={(e) => {
+                              const list = [...staffDraftMeeting.actionItems];
+                              list[idx] = { ...list[idx], task: e.target.value };
+                              setStaffDraftMeeting({ ...staffDraftMeeting, actionItems: list });
+                            }}
+                            placeholder="待辦事項描述..."
+                            style={{ flex: '2 1 220px' }}
+                          />
+                          <input
+                            type="text"
+                            value={act.assignee || ''}
+                            onChange={(e) => {
+                              const list = [...staffDraftMeeting.actionItems];
+                              list[idx] = { ...list[idx], assignee: e.target.value };
+                              setStaffDraftMeeting({ ...staffDraftMeeting, actionItems: list });
+                            }}
+                            placeholder="負責人（如：潘俊儒）"
+                            style={{ flex: '1 1 110px' }}
+                          />
+                          <input
+                            type="date"
+                            value={act.dueDate || ''}
+                            onChange={(e) => {
+                              const list = [...staffDraftMeeting.actionItems];
+                              list[idx] = { ...list[idx], dueDate: e.target.value };
+                              setStaffDraftMeeting({ ...staffDraftMeeting, actionItems: list });
+                            }}
+                            style={{ width: '145px' }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const list = staffDraftMeeting.actionItems.filter((_, i) => i !== idx);
+                              setStaffDraftMeeting({ ...staffDraftMeeting, actionItems: list });
+                            }}
+                            className="btn btn-danger"
+                            style={{ padding: '0.35rem 0.6rem' }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 【問卷系統連動】本場會議專屬問卷或課後測驗連結（選填） */}
+                <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem', background: '#f0fdfa', borderColor: '#99f6e4' }}>
+                  <label style={{ margin: '0 0 0.4rem 0', color: '#0f766e', display: 'block' }}>
+                    📝 連動本場會議問卷 / 課後測驗網址（選填，未填則預設使用全科問卷系統網址）
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={staffDraftMeeting.surveyTitle || ''}
+                      onChange={(e) => setStaffDraftMeeting({ ...staffDraftMeeting, surveyTitle: e.target.value })}
+                      placeholder="問卷按鈕標題（如：填寫課後滿意度問卷）"
+                      style={{ flex: '1 1 200px' }}
+                    />
+                    <input
+                      type="url"
+                      value={staffDraftMeeting.surveyUrl || ''}
+                      onChange={(e) => setStaffDraftMeeting({ ...staffDraftMeeting, surveyUrl: e.target.value })}
+                      placeholder="貼上您的問卷系統網址（如 http://localhost:3001 或 Google表單 / 自製問卷網址）..."
+                      style={{ flex: '2 1 320px' }}
+                    />
+                  </div>
+                </div>
+
+                {/* 【E】會議現場照片與佐證文件檔案上傳（支援圖片、PDF、Word、Excel、PPTX、CSV） */}
+                <div className="card" style={{ marginBottom: '1.2rem', padding: '0.9rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <label style={{ margin: 0 }}>
+                      📎 伍、會議現場照片或 PDF / Word / Excel / PPTX 佐證附件（選填，已附加 {(staffDraftMeeting.attachments || []).length} 件）
+                    </label>
+                    <label className="btn btn-secondary" style={{ margin: 0, padding: '0.38rem 0.85rem', fontSize: '0.8rem', cursor: 'pointer', background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd' }}>
+                      <Upload size={14} /> 上傳照片或 PDF/Word/Excel 檔案
+                      <input
+                        type="file"
+                        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt"
+                        multiple
+                        onChange={handleStaffUploadPhoto}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
+                  </div>
+                  {(staffDraftMeeting.attachments || []).length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.65rem' }}>
+                      {staffDraftMeeting.attachments.map((att, idx) => {
+                        const isImg = isImageAttachment(att);
+                        const badge = getFileTypeBadge(att);
+                        return (
+                          <div
+                            key={att.id || idx}
+                            style={{
+                              border: '1px solid #cbd5e1',
+                              borderRadius: '8px',
+                              padding: '0.4rem',
+                              width: '150px',
+                              textAlign: 'center',
+                              background: '#ffffff'
+                            }}
+                          >
+                            {isImg ? (
+                              <img src={att.url} alt={att.title} style={{ width: '100%', height: '68px', objectFit: 'cover', borderRadius: '6px' }} />
+                            ) : (
+                              <div
+                                style={{
+                                  height: '68px',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  background: '#f8fafc',
+                                  borderRadius: '6px',
+                                  padding: '0.25rem'
+                                }}
+                              >
+                                <span className="badge" style={{ background: badge.bg, color: badge.color, fontSize: '0.72rem' }}>
+                                  {badge.label}
+                                </span>
+                              </div>
+                            )}
+                            <div style={{ fontSize: '0.73rem', color: '#334155', marginTop: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={att.title}>
+                              {att.title}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = staffDraftMeeting.attachments.filter((_, i) => i !== idx);
+                                setStaffDraftMeeting({ ...staffDraftMeeting, attachments: next });
+                              }}
+                              className="btn btn-danger"
+                              style={{ padding: '0.15rem 0.45rem', fontSize: '0.7rem', marginTop: '0.25rem' }}
+                            >
+                              移除
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => setShowCreateModal(false)} className="btn btn-secondary">
                 取消
               </button>
-              <button
-                type="button"
-                onClick={handleSaveStaffMeeting}
-                disabled={savingStaffMeeting}
-                className="btn btn-success"
-                style={{ padding: '0.7rem 1.5rem', fontSize: '1rem' }}
-              >
-                <Save size={18} /> {savingStaffMeeting ? '儲存中...' : staffDraftMeeting.id ? '儲存會議修改' : '🚀 確認發起並發布會議紀錄'}
-              </button>
+              {modalMode === 'initiate' ? (
+                <button
+                  type="button"
+                  onClick={(e) => handleSaveStaffMeeting(e, 'in_progress')}
+                  disabled={savingStaffMeeting}
+                  className="btn btn-success"
+                  style={{ padding: '0.7rem 1.5rem', fontSize: '1rem' }}
+                >
+                  <Save size={18} /> {savingStaffMeeting ? '發起中...' : '🚀 確認發起會議（開放現場簽到，點選進入做會議紀錄）'}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) =>
+                      handleSaveStaffMeeting(
+                        e,
+                        staffDraftMeeting.status === 'returned'
+                          ? 'returned'
+                          : staffDraftMeeting.status === 'published'
+                          ? 'published'
+                          : 'in_progress'
+                      )
+                    }
+                    disabled={savingStaffMeeting}
+                    className="btn"
+                    style={{ background: '#2563eb', padding: '0.7rem 1.25rem', fontSize: '0.95rem' }}
+                  >
+                    <Save size={18} /> {savingStaffMeeting ? '儲存中...' : '💾 暫存紀錄資料（稍後繼續登錄）'}
+                  </button>
+                  {staffDraftMeeting.status !== 'published' && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleSaveStaffMeeting(e, 'pending_review')}
+                      disabled={savingStaffMeeting}
+                      className="btn btn-purple"
+                      style={{ padding: '0.7rem 1.45rem', fontSize: '0.98rem' }}
+                    >
+                      <CheckCircle2 size={18} /> 🏁 結束會議（完成資料登錄，送交技術主任確認）
+                    </button>
+                  )}
+                </>
+              )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== 會議進行中：現場簽到 QR Code 彈出視窗 ==================== */}
+      {qrModalMeeting && (
+        <div
+          className="no-print animate-fade-in"
+          onClick={() => setQrModalMeeting(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.78)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#ffffff',
+              borderRadius: '18px',
+              width: '100%',
+              maxWidth: '460px',
+              padding: '1.5rem',
+              textAlign: 'center',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+              border: '2px solid #16a34a'
+            }}
+          >
+            <span className="badge" style={{ background: '#dcfce7', color: '#15803d', marginBottom: '0.4rem' }}>
+              📲 會議現場出席簽到 QR Code
+            </span>
+            <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.2rem', color: '#0f172a' }}>
+              {qrModalMeeting.title}
+            </h3>
+            <p style={{ margin: '0 0 0.9rem 0', fontSize: '0.84rem', color: '#64748b' }}>
+              請與會同仁使用手機相機或 LINE 掃描下方 QR Code，選擇姓名即可一鍵完成現場出席簽到！
+            </p>
+            {qrDataUrl && (
+              <div style={{ background: '#f8fafc', padding: '0.75rem', borderRadius: '12px', display: 'inline-block', border: '1px solid #cbd5e1', marginBottom: '0.85rem' }}>
+                <img src={qrDataUrl} alt="簽到 QR Code" style={{ width: '250px', height: '250px', display: 'block' }} />
+              </div>
+            )}
+            <div style={{ fontSize: '0.76rem', color: '#64748b', wordBreak: 'break-all', marginBottom: '1rem' }}>
+              簽到網址：<code>{checkinUrl}</code>
+            </div>
+            <button
+              type="button"
+              onClick={() => setQrModalMeeting(null)}
+              className="btn btn-secondary"
+              style={{ width: '100%', padding: '0.65rem' }}
+            >
+              關閉 QR Code 視窗
+            </button>
           </div>
         </div>
       )}

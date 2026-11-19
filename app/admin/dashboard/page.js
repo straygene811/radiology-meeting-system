@@ -1187,7 +1187,43 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // ==================== Tab 3: 三級審核與 LINE 催簽訊息 ====================
+  // ==================== Tab 3: 主管審核（技術主任確認公布／退回記錄人修改）與 LINE 催簽訊息 ====================
+  const handleAdminDirectorReview = async (meetingId, decision) => {
+    let reasonText = approvalComment.trim();
+    if (decision === 'return' && !reasonText) {
+      const prompted = window.prompt(
+        '請輸入退回記錄人修改的原因或補充說明（系統將完整保留所有已維護之會議紀錄內容退回上一步）：',
+        '請記錄人補充或修正會議紀錄內容後，再次按結束會議送出確認'
+      );
+      if (prompted === null) return;
+      reasonText = prompted.trim() || '請記錄人補充或修正會議紀錄內容後，再次按結束會議送出確認';
+    }
+
+    try {
+      const res = await fetch('/api/meetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'director_review_meeting',
+          id: meetingId,
+          decision,
+          reviewerName: approvalApproverName || '林宜蓁 技術主任',
+          reason: reasonText
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMeetings(data.meetings || []);
+        setApprovalComment('');
+        showToast(data.message);
+      } else {
+        alert(data.error || '審核操作失敗');
+      }
+    } catch (err) {
+      alert('網路連線異常');
+    }
+  };
+
   const handleAdvanceApproval = async (meetingId, nextStatus) => {
     try {
       const res = await fetch('/api/meetings', {
@@ -2892,10 +2928,25 @@ export default function AdminDashboardPage() {
                           )}
                         </div>
 
-                        {/* 2. 會議標題與關鍵字命中段落明細 */}
+                        {/* 2. 會議標題與流程狀態／關鍵字命中段落明細 */}
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a', lineHeight: 1.4, display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                             <HighlightText text={m.title} keyword={meetingSearchQuery} />
+                            {m.status === 'in_progress' && (
+                              <span className="badge" style={{ background: '#dcfce7', color: '#15803d', fontSize: '0.73rem' }}>
+                                🟢 會議進行中（開放現場簽到）
+                              </span>
+                            )}
+                            {m.status === 'returned' && (
+                              <span className="badge" style={{ background: '#ffedd5', color: '#c2410c', fontSize: '0.73rem' }}>
+                                🟠 已退回記錄人修改
+                              </span>
+                            )}
+                            {(m.status === 'pending_review' || m.status === 'pending_chair' || m.status === 'pending_director') && (
+                              <span className="badge" style={{ background: '#fef3c7', color: '#b45309', fontSize: '0.73rem' }}>
+                                ⏳ 待技術主任確認公布
+                              </span>
+                            )}
                             {isAdminSearchingKeyword && searchMatches.length > 0 && (
                               <span
                                 className="badge"
@@ -3044,6 +3095,26 @@ export default function AdminDashboardPage() {
                         </button>
 
                         <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          {m.status && m.status !== 'published' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleAdminDirectorReview(m.id, 'publish')}
+                                className="btn btn-success"
+                                style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem' }}
+                              >
+                                <CheckCircle2 size={15} /> ✅ 技術主任確認無誤・正式公布
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleAdminDirectorReview(m.id, 'return')}
+                                className="btn"
+                                style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem', background: '#ea580c' }}
+                              >
+                                <RotateCcw size={15} /> ↩️ 退回記錄人修改（保留已維護內容）
+                              </button>
+                            </>
+                          )}
                           {m.isArchived ? (
                             <button
                               type="button"
@@ -4490,27 +4561,19 @@ export default function AdminDashboardPage() {
                   />
                   <button
                     type="button"
-                    onClick={() => handleAdvanceApproval(selectedApprovalMtg.id, 'pending_chair')}
-                    className="btn btn-secondary"
-                    style={{ fontSize: '0.84rem' }}
-                  >
-                    1. 紀錄人送交主席覆核
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleAdvanceApproval(selectedApprovalMtg.id, 'pending_director')}
+                    onClick={() => handleAdminDirectorReview(selectedApprovalMtg.id, 'return')}
                     className="btn"
-                    style={{ fontSize: '0.84rem' }}
+                    style={{ fontSize: '0.84rem', background: '#ea580c' }}
                   >
-                    2. 主席覆核通過送主任
+                    <RotateCcw size={15} /> ↩️ 退回記錄人修改資料（保留已維護內容退回上一步）
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleAdvanceApproval(selectedApprovalMtg.id, 'published')}
+                    onClick={() => handleAdminDirectorReview(selectedApprovalMtg.id, 'publish')}
                     className="btn btn-success"
                     style={{ fontSize: '0.84rem' }}
                   >
-                    <CheckCircle2 size={16} /> 3. 主任核准並發布全科簽閱
+                    <CheckCircle2 size={16} /> ✅ 技術主任確認無誤・正式公布（開放全科查閱）
                   </button>
                 </div>
               </div>

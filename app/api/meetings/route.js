@@ -30,8 +30,15 @@ export async function POST(request) {
     const { action } = body;
     const role = await verifyAdmin();
 
-    // 允許所有已登入之前台同仁執行「發起會議紀錄 (save_meeting / staff_create_meeting)」、「修改會議標題 (quick_update_title)」與「設定問卷系統連結 (update_survey_url)」
-    const staffAllowedActions = ['save_meeting', 'staff_create_meeting', 'quick_update_title', 'update_survey_url'];
+    // 允許所有已登入之前台同仁執行「發起會議 / 儲存紀錄」、「結束會議送審」、「技術主任確認公布 / 退回修改」、「修改會議標題」與「設定問卷系統連結」
+    const staffAllowedActions = [
+      'save_meeting',
+      'staff_create_meeting',
+      'finish_meeting_record',
+      'director_review_meeting',
+      'quick_update_title',
+      'update_survey_url'
+    ];
     if (!role && !staffAllowedActions.includes(action)) {
       return NextResponse.json({ error: '未授權的存取，請先登入管理後台' }, { status: 401 });
     }
@@ -67,11 +74,34 @@ export async function POST(request) {
       let savedMeeting = null;
 
       if (idx >= 0) {
+        const existing = meetings[idx];
+        const existingCheckins = existing.checkins || {};
+        const checkedInNames = Object.keys(existingCheckins);
+        const mergedPresent = Array.from(
+          new Set([...(meeting.presentStaffNames || existing.presentStaffNames || []), ...checkedInNames])
+        );
+        const mergedLeave = (meeting.leaveStaffNames || existing.leaveStaffNames || []).filter(
+          (n) => !mergedPresent.includes(n)
+        );
+        const nextStatus = meeting.status || existing.status || 'in_progress';
+        const nextChain = { ...(existing.approvalChain || {}), ...(meeting.approvalChain || {}) };
+        if (nextStatus === 'pending_review') {
+          nextChain.recorderSubmittedBy = initiatedBy || meeting.recorder || existing.recorder || '記錄人';
+          nextChain.recorderSubmittedAt = nowIso;
+        }
+
         meetings[idx] = {
-          ...meetings[idx],
+          ...existing,
           ...meeting,
           title: meeting.title.trim(),
           rocYear: computedRocYear,
+          status: nextStatus,
+          presentStaffNames: mergedPresent,
+          leaveStaffNames: mergedLeave,
+          checkins: meeting.checkins || existingCheckins,
+          signatures: meeting.signatures || existing.signatures || {},
+          approvalChain: nextChain,
+          ...(nextStatus === 'pending_review' ? { endedAt: nowIso } : {}),
           isArchived: Boolean(meeting.isArchived),
           updatedAt: nowIso
         };
@@ -79,6 +109,7 @@ export async function POST(request) {
       } else {
         const newId = meeting.id || `MTG-${computedRocYear}-${Date.now().toString().slice(-4)}`;
         const creatorName = initiatedBy || meeting.recorder || '潘俊儒';
+        const initialStatus = meeting.status || (action === 'staff_create_meeting' ? 'in_progress' : 'published');
         const newMeeting = {
           id: newId,
           title: meeting.title.trim(),
@@ -91,7 +122,7 @@ export async function POST(request) {
           chair: meeting.chair || '林宜蓁',
           recorder: meeting.recorder || creatorName,
           initiatedBy: creatorName,
-          status: meeting.status || 'published',
+          status: initialStatus,
           isArchived: Boolean(meeting.isArchived),
           reopenedForStaff: meeting.reopenedForStaff || [],
           targetGroups: Array.isArray(meeting.targetGroups) && meeting.targetGroups.length > 0 ? meeting.targetGroups : ['全科人員'],
@@ -106,15 +137,19 @@ export async function POST(request) {
           surveyUrl: (meeting.surveyUrl || '').trim(),
           surveyTitle: (meeting.surveyTitle || '').trim(),
           approvalChain: meeting.approvalChain || {
-            recorderSubmittedBy: meeting.recorder || creatorName,
-            recorderSubmittedAt: nowIso,
-            chairApprovedBy: meeting.chair || null,
-            chairApprovedAt: nowIso,
-            directorApprovedBy: '許志賢 科主任',
-            directorApprovedAt: nowIso
+            recorderSubmittedBy: initialStatus === 'published' ? meeting.recorder || creatorName : null,
+            recorderSubmittedAt: initialStatus === 'published' ? nowIso : null,
+            chairApprovedBy: initialStatus === 'published' ? meeting.chair || null : null,
+            chairApprovedAt: initialStatus === 'published' ? nowIso : null,
+            directorApprovedBy: initialStatus === 'published' ? '林宜蓁 技術主任' : null,
+            directorApprovedAt: initialStatus === 'published' ? nowIso : null
           },
+          checkins: meeting.checkins || {},
           signatures: meeting.signatures || {},
           rawTranscript: meeting.rawTranscript || '',
+          returnReason: '',
+          returnedBy: '',
+          returnedAt: null,
           createdAt: nowIso
         };
         meetings.unshift(newMeeting);
@@ -122,12 +157,139 @@ export async function POST(request) {
       }
 
       await db.write('meetings.json', meetings);
+      const statusMsg =
+        savedMeeting.status === 'in_progress'
+          ? `✅ 已發起會議「${savedMeeting.title}」（現已開放同仁現場簽到，請點選進入執行會議紀錄）！`
+          : savedMeeting.status === 'pending_review'
+          ? `🏁 已結束會議並完成資料登錄！正待技術主任確認無誤後按「公布」。`
+          : `✅ 會議紀錄「${savedMeeting.title}」已成功儲存！`;
       return NextResponse.json({
         success: true,
         meetings,
         savedMeeting,
-        message: `✅ 會議紀錄「${savedMeeting.title}」已成功儲存並發起！`
+        message: statusMsg
       });
+    }
+
+    // 記錄人完成會議後按「結束會議」：結束資料登錄，送交技術主任確認無誤後按公布
+    if (action === 'finish_meeting_record') {
+      const { id, recorderName, meeting: updatedFields } = body;
+      const idx = meetings.findIndex((m) => m.id === id);
+      if (idx < 0) {
+        return NextResponse.json({ error: '找不到該場會議' }, { status: 404 });
+      }
+      const nowIso = new Date().toISOString();
+      const existing = meetings[idx];
+      const existingCheckins = existing.checkins || {};
+      const checkedInNames = Object.keys(existingCheckins);
+      const basePresent = updatedFields?.presentStaffNames || existing.presentStaffNames || [];
+      const mergedPresent = Array.from(new Set([...basePresent, ...checkedInNames]));
+      const baseLeave = updatedFields?.leaveStaffNames || existing.leaveStaffNames || [];
+      const mergedLeave = baseLeave.filter((n) => !mergedPresent.includes(n));
+
+      const chain = {
+        ...(existing.approvalChain || {}),
+        recorderSubmittedBy: recorderName || existing.recorder || '會議記錄人',
+        recorderSubmittedAt: nowIso
+      };
+
+      meetings[idx] = {
+        ...existing,
+        ...(updatedFields ? { ...updatedFields, id: existing.id } : {}),
+        presentStaffNames: mergedPresent,
+        leaveStaffNames: mergedLeave,
+        checkins: existingCheckins,
+        signatures: existing.signatures || {},
+        status: 'pending_review',
+        endedAt: nowIso,
+        approvalChain: chain,
+        updatedAt: nowIso
+      };
+
+      await db.write('meetings.json', meetings);
+      return NextResponse.json({
+        success: true,
+        meetings,
+        updatedMeeting: meetings[idx],
+        message: `🏁 已結束會議並完成資料登錄！本場會議紀錄已送交「技術主任」確認，待技術主任按「公布」後即開放全科查閱。`
+      });
+    }
+
+    // 技術主任確認審核：確認無誤按「公布」(decision='publish') OR 退回記錄人修改資料 (decision='return'，完整保留已維護資料內容退回上一步)
+    if (action === 'director_review_meeting') {
+      const { id, decision, reviewerName, reason = '' } = body;
+      const idx = meetings.findIndex((m) => m.id === id);
+      if (idx < 0) {
+        return NextResponse.json({ error: '找不到該場會議' }, { status: 404 });
+      }
+      const nowIso = new Date().toISOString();
+      const m = meetings[idx];
+      const cleanReviewer = (reviewerName || '林宜蓁').trim();
+      const chain = { ...(m.approvalChain || {}) };
+      const sigs = { ...(m.signatures || {}) };
+
+      if (decision === 'publish') {
+        chain.chairApprovedBy = cleanReviewer;
+        chain.chairApprovedAt = nowIso;
+        chain.directorApprovedBy = cleanReviewer;
+        chain.directorApprovedAt = nowIso;
+
+        const cleanPersonName = cleanReviewer.split(' ')[0];
+        sigs[cleanPersonName] = {
+          staffId: 'TECH_DIRECTOR',
+          name: cleanPersonName,
+          method: '技術主任確認公布',
+          signedAt: nowIso,
+          comment: (reason || '技術主任確認無誤，正式公布開放全科查閱').trim(),
+          signatureDataUrl: sigs[cleanPersonName]?.signatureDataUrl || m.checkins?.[cleanPersonName]?.signatureDataUrl || null
+        };
+
+        meetings[idx] = {
+          ...m,
+          status: 'published',
+          publishedAt: nowIso,
+          publishedBy: cleanReviewer,
+          approvalChain: chain,
+          signatures: sigs,
+          returnReason: '',
+          updatedAt: nowIso
+        };
+
+        await db.write('meetings.json', meetings);
+        return NextResponse.json({
+          success: true,
+          meetings,
+          updatedMeeting: meetings[idx],
+          message: `✅ 技術主任（${cleanReviewer}）已確認無誤並正式「公布」！現已開放全科其他人員查閱與簽閱。`
+        });
+      }
+
+      if (decision === 'return') {
+        chain.returnedBy = cleanReviewer;
+        chain.returnedAt = nowIso;
+        chain.returnReason = (reason || '請記錄人補充或修正會議紀錄資料後，再次送出確認').trim();
+
+        // 完整保留所有已維護之資料內容（agendaItems, discussionSections, resolutions, actionItems, attachments, rawTranscript, presentStaffNames, checkins 等）退回上一步
+        meetings[idx] = {
+          ...m,
+          status: 'returned',
+          returnedBy: cleanReviewer,
+          returnedAt: nowIso,
+          returnReason: chain.returnReason,
+          approvalChain: chain,
+          updatedAt: nowIso
+        };
+
+        await db.write('meetings.json', meetings);
+        return NextResponse.json({
+          success: true,
+          meetings,
+          updatedMeeting: meetings[idx],
+          message: `↩️ 已退回記錄人（${m.recorder || '原記錄人'}）修改資料！（已完整保留所有已維護之資料內容退回上一步）`
+        });
+      }
+
+      return NextResponse.json({ error: '未知的審核決定' }, { status: 400 });
     }
 
     if (action === 'delete_meeting') {
