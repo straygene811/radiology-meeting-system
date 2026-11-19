@@ -154,10 +154,21 @@ export default function HomePage() {
   const [voiceCorrections, setVoiceCorrections] = useState([]);
   const [polishingVoice, setPolishingVoice] = useState(false);
   const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [mobileVoiceHint, setMobileVoiceHint] = useState('');
+  const [frontendAudioBase64, setFrontendAudioBase64] = useState(null);
+  const [frontendAudioMime, setFrontendAudioMime] = useState('audio/mp4');
+  const [frontendAudioName, setFrontendAudioName] = useState('');
+  const [frontendAudioUrl, setFrontendAudioUrl] = useState(null);
+  const [isFrontendAudioRecording, setIsFrontendAudioRecording] = useState(false);
+  const [frontendAudioSeconds, setFrontendAudioSeconds] = useState(0);
   const [aiStructuringLoading, setAiStructuringLoading] = useState(false);
   const [frontendHandwrittenImages, setFrontendHandwrittenImages] = useState([]);
   const [savingFrontendDraftInbox, setSavingFrontendDraftInbox] = useState(false);
   const speechRecRef = useRef(null);
+  const wantVoiceListeningRef = useRef(false);
+  const voiceTextareaRef = useRef(null);
+  const frontendMediaRecorderRef = useRef(null);
+  const frontendAudioTimerRef = useRef(null);
   const latestVoiceTextRef = useRef('');
 
   // 【G】列表欄位排序狀態
@@ -784,8 +795,111 @@ export default function HomePage() {
     }
   };
 
+  const activateMobileKeyboardDictation = (reasonMsg = '') => {
+    setMobileVoiceHint(
+      reasonMsg ||
+        '📱 已為您點開下方文字框！請直接點擊您「手機鍵盤右下角（或空白鍵旁）的 🎤 麥克風圖示」開始說話（Apple/Google 原生語音輸入最準確，且支援 LINE 與所有手機瀏覽器）！'
+    );
+    setTimeout(() => {
+      if (voiceTextareaRef.current) {
+        voiceTextareaRef.current.focus();
+      }
+    }, 80);
+  };
+
+  const toggleFrontendPureAudioRecorder = async () => {
+    if (isFrontendAudioRecording) {
+      if (frontendAudioTimerRef.current) {
+        clearInterval(frontendAudioTimerRef.current);
+        frontendAudioTimerRef.current = null;
+      }
+      if (frontendMediaRecorderRef.current && frontendMediaRecorderRef.current.state !== 'inactive') {
+        try {
+          frontendMediaRecorderRef.current.stop();
+        } catch {}
+      }
+      setIsFrontendAudioRecording(false);
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      alert('目前瀏覽器不支援直接錄音，請點選「📂 上傳手機錄音檔」或使用手機鍵盤 🎤 語音輸入！');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const preferredMime =
+        typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/mp4')
+          ? 'audio/mp4'
+          : typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : '';
+      let mr;
+      try {
+        mr = preferredMime
+          ? new MediaRecorder(stream, { mimeType: preferredMime, audioBitsPerSecond: 32000 })
+          : new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+      } catch {
+        mr = new MediaRecorder(stream);
+      }
+
+      const chunks = [];
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+      mr.onstop = () => {
+        const actualMime = mr.mimeType || preferredMime || 'audio/mp4';
+        const ext = actualMime.includes('mp4') || actualMime.includes('aac') ? 'm4a' : 'webm';
+        const blob = new Blob(chunks, { type: actualMime });
+        const url = URL.createObjectURL(blob);
+        setFrontendAudioUrl(url);
+        setFrontendAudioMime(actualMime);
+        setFrontendAudioName(`手機會議錄音_${new Date().toISOString().slice(0, 10)}.${ext}`);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const b64 = String(ev.target.result || '').split(',')[1] || '';
+          setFrontendAudioBase64(b64);
+          showToast('🎵 手機語音錄製完成！可點選「☁️ 暫存至雲端」回電腦用 IDE 分析，或直接轉換！');
+        };
+        reader.readAsDataURL(blob);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+
+      mr.start();
+      frontendMediaRecorderRef.current = mr;
+      setFrontendAudioSeconds(0);
+      setIsFrontendAudioRecording(true);
+      frontendAudioTimerRef.current = setInterval(() => {
+        setFrontendAudioSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err) {
+      activateMobileKeyboardDictation(
+        '📱 您的手機瀏覽器（如 LINE 內建瀏覽器）限制網頁直接存取麥克風，已自動為您點開下方文字框：請直接按「手機鍵盤右下角的 🎤 麥克風」講話，或點選「📂 上傳手機錄音檔」！'
+      );
+    }
+  };
+
+  const handleFrontendAudioFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFrontendAudioName(file.name);
+    setFrontendAudioMime(file.type || 'audio/mp4');
+    const url = URL.createObjectURL(file);
+    setFrontendAudioUrl(url);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const b64 = String(ev.target.result || '').split(',')[1] || '';
+      setFrontendAudioBase64(b64);
+      showToast(`🎵 已載入錄音檔「${file.name}」，可點選「☁️ 暫存至雲端（回電腦用 IDE 整理）」！`);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
   const toggleFrontendVoiceRecognition = () => {
-    if (isVoiceListening) {
+    if (isVoiceListening || wantVoiceListeningRef.current) {
+      wantVoiceListeningRef.current = false;
       if (speechRecRef.current) {
         try {
           speechRecRef.current.stop();
@@ -801,24 +915,36 @@ export default function HomePage() {
     }
 
     if (typeof window === 'undefined') return;
+    const ua = navigator.userAgent || '';
+    const isMobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua);
+    const isLineOrIosChrome = /Line\/|CriOS\/|FBIOS\//i.test(ua);
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRec) {
-      alert('您的瀏覽器不支援即時語音辨識，建議使用 Chrome 或 Edge 瀏覽器，或直接於下方文字框輸入內容。');
+
+    if (!SpeechRec || isLineOrIosChrome) {
+      activateMobileKeyboardDictation(
+        '📱 偵測到您使用手機 LINE 或 iOS Chrome 瀏覽器（Apple 限制網頁即時聽寫 API），已為您點開下方輸入框：請直接點選「手機鍵盤上的 🎤 麥克風」說話（辨識最準確！），或點選上方「🎵 手機錄音檔」按鈕！'
+      );
       return;
     }
 
     latestVoiceTextRef.current = voiceQuickText;
+    wantVoiceListeningRef.current = true;
+    setMobileVoiceHint('');
+
     const rec = new SpeechRec();
     rec.lang = 'zh-TW';
-    rec.continuous = true;
+    // 手機瀏覽器設為 continuous = false 並於 onend 自動無縫重啟，可徹底解決 iOS 斷線與 Android 重複疊字 Bug
+    rec.continuous = !isMobile;
     rec.interimResults = true;
+
     rec.onresult = (event) => {
       let finalChunk = '';
       let interimChunk = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript;
+        const t = (event.results[i][0].transcript || '').trim();
+        if (!t) continue;
         if (event.results[i].isFinal) {
-          finalChunk += t + '。';
+          finalChunk += /[。！？]$/.test(t) ? t : `${t}。`;
         } else {
           interimChunk += t;
         }
@@ -832,22 +958,55 @@ export default function HomePage() {
         });
       }
     };
-    rec.onerror = () => {
-      setIsVoiceListening(false);
-      setVoiceInterimText('');
+
+    rec.onerror = (event) => {
+      const errCode = event?.error || '';
+      if (errCode === 'no-speech') {
+        // 手機短暫停頓無聲音時不中斷，交由 onend 自動重啟
+        return;
+      }
+      if (errCode === 'not-allowed' || errCode === 'service-not-allowed' || errCode === 'audio-capture') {
+        wantVoiceListeningRef.current = false;
+        setIsVoiceListening(false);
+        setVoiceInterimText('');
+        activateMobileKeyboardDictation(
+          '📱 手機瀏覽器未開啟網頁麥克風權限（或受 iOS 限制），已自動為您點開下方文字框：請直接按「手機鍵盤右下角的 🎤 麥克風」開始說話，或使用「🎵 手機錄音檔」功能！'
+        );
+      }
     };
+
     rec.onend = () => {
-      setIsVoiceListening(false);
-      setVoiceInterimText('');
+      if (wantVoiceListeningRef.current) {
+        setTimeout(() => {
+          if (!wantVoiceListeningRef.current) return;
+          try {
+            rec.start();
+          } catch {
+            wantVoiceListeningRef.current = false;
+            setIsVoiceListening(false);
+            setVoiceInterimText('');
+          }
+        }, 180);
+      } else {
+        setIsVoiceListening(false);
+        setVoiceInterimText('');
+      }
     };
+
     speechRecRef.current = rec;
-    rec.start();
-    setIsVoiceListening(true);
+    try {
+      rec.start();
+      setIsVoiceListening(true);
+    } catch {
+      wantVoiceListeningRef.current = false;
+      setIsVoiceListening(false);
+      activateMobileKeyboardDictation();
+    }
   };
 
   const handleSaveFrontendDraftInbox = async () => {
-    if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0) {
-      alert('請先使用麥克風錄音轉文字、輸入速記內容或上傳手寫稿照片後再暫存至雲端！');
+    if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0 && !frontendAudioBase64) {
+      alert('請先使用語音輸入、錄製/上傳手機錄音檔、輸入速記內容或上傳手寫稿照片後再暫存至雲端！');
       return;
     }
     setSavingFrontendDraftInbox(true);
@@ -862,7 +1021,10 @@ export default function HomePage() {
           date: staffDraftMeeting?.date || new Date().toISOString().slice(0, 10),
           createdBy: currentUser?.name || staffDraftMeeting?.recorder || '科內紀錄人',
           transcript: voiceQuickText,
-          handwrittenImages: frontendHandwrittenImages
+          handwrittenImages: frontendHandwrittenImages,
+          audioBase64: frontendAudioBase64,
+          audioMimeType: frontendAudioMime,
+          audioFileName: frontendAudioName
         })
       });
       const data = await res.json();
@@ -879,8 +1041,8 @@ export default function HomePage() {
   };
 
   const handleRunFrontendAiStructuring = async () => {
-    if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0) {
-      alert('請先點選「🎙️ 開始語音辨識」說話、上傳手寫稿照片，或在文字框輸入幾句會議重點！');
+    if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0 && !frontendAudioBase64) {
+      alert('請先點選語音輸入說話、上傳手寫稿照片、上傳錄音檔，或在文字框輸入幾句會議重點！');
       return;
     }
     if (!staffDraftMeeting) return;
@@ -893,6 +1055,8 @@ export default function HomePage() {
           transcript: voiceQuickText,
           category: staffDraftMeeting.category || 'dept',
           meetingTitle: staffDraftMeeting.title || '',
+          audioBase64: frontendAudioBase64,
+          audioMimeType: frontendAudioMime,
           handwrittenImages: frontendHandwrittenImages.map((img) => ({
             base64: img.base64,
             mimeType: img.mimeType,
@@ -3010,7 +3174,7 @@ export default function HomePage() {
             <div className="card" style={{ marginBottom: '1.15rem', background: '#faf5ff', borderColor: '#d8b4fe' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.6rem' }}>
                 <div style={{ fontWeight: 700, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Mic size={18} /> 🎙️ 語音／📷 手寫稿轉文字 ＆ 智慧潤飾詞句（支援影醫科人名與專有名詞校正）
+                  <Mic size={18} /> 🎙️ 手機／電腦語音轉文字、錄音檔 ＆ 📷 手寫稿智慧潤飾
                 </div>
                 <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
                   <button
@@ -3033,6 +3197,55 @@ export default function HomePage() {
                       </>
                     )}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => activateMobileKeyboardDictation()}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '0.38rem 0.8rem',
+                      fontSize: '0.82rem',
+                      background: '#fffbeb',
+                      color: '#b45309',
+                      borderColor: '#fcd34d'
+                    }}
+                    title="iPhone / Android / LINE 瀏覽器最推薦：點擊後直接按手機鍵盤右下角的 🎤 麥克風說話"
+                  >
+                    ⌨️ 手機鍵盤「🎤語音輸入」(LINE/iOS最準)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={toggleFrontendPureAudioRecorder}
+                    className={`btn btn-secondary ${isFrontendAudioRecording ? 'recording-pulse' : ''}`}
+                    style={{
+                      padding: '0.38rem 0.8rem',
+                      fontSize: '0.82rem',
+                      background: isFrontendAudioRecording ? '#dc2626' : '#f1f5f9',
+                      color: isFrontendAudioRecording ? '#ffffff' : '#334155',
+                      borderColor: isFrontendAudioRecording ? '#dc2626' : '#cbd5e1'
+                    }}
+                  >
+                    {isFrontendAudioRecording ? `⏹️ 停止手機錄音 (${frontendAudioSeconds}秒)` : '🎵 錄製語音檔'}
+                  </button>
+                  <label
+                    className="btn btn-secondary"
+                    style={{
+                      margin: 0,
+                      cursor: 'pointer',
+                      padding: '0.38rem 0.8rem',
+                      fontSize: '0.82rem',
+                      background: '#f5f3ff',
+                      color: '#6d28d9',
+                      borderColor: '#c4b5fd'
+                    }}
+                  >
+                    <Upload size={14} /> 📂 選取手機錄音檔{frontendAudioName ? ' (已載入)' : ''}
+                    <input
+                      type="file"
+                      accept="audio/*,.mp3,.m4a,.wav,.webm,.aac"
+                      onChange={handleFrontendAudioFileUpload}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
                   <label
                     className="btn btn-secondary"
                     style={{
@@ -3094,6 +3307,70 @@ export default function HomePage() {
                   </button>
                 </div>
               </div>
+
+              {mobileVoiceHint && (
+                <div
+                  style={{
+                    marginBottom: '0.55rem',
+                    padding: '0.55rem 0.8rem',
+                    background: '#fffbeb',
+                    border: '1.5px solid #f59e0b',
+                    borderRadius: '8px',
+                    fontSize: '0.83rem',
+                    color: '#92400e',
+                    fontWeight: 600,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}
+                >
+                  <span>{mobileVoiceHint}</span>
+                  <button
+                    type="button"
+                    onClick={() => setMobileVoiceHint('')}
+                    style={{ background: 'transparent', border: 'none', color: '#92400e', fontWeight: 800, cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {frontendAudioUrl && (
+                <div
+                  style={{
+                    marginBottom: '0.55rem',
+                    padding: '0.45rem 0.75rem',
+                    background: '#f0f9ff',
+                    border: '1px solid #7dd3fc',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '0.5rem',
+                    fontSize: '0.82rem',
+                    color: '#0369a1'
+                  }}
+                >
+                  <span>🎵 已載入語音檔：<strong>{frontendAudioName}</strong></span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <audio src={frontendAudioUrl} controls style={{ height: '30px', maxWidth: '210px' }} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFrontendAudioUrl(null);
+                        setFrontendAudioBase64(null);
+                        setFrontendAudioName('');
+                      }}
+                      className="btn btn-danger"
+                      style={{ padding: '0.18rem 0.5rem', fontSize: '0.74rem' }}
+                    >
+                      移除
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {frontendHandwrittenImages.length > 0 && (
                 <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.55rem' }}>
@@ -3193,6 +3470,7 @@ export default function HomePage() {
               )}
 
               <textarea
+                ref={voiceTextareaRef}
                 rows={4}
                 value={voiceQuickText}
                 onChange={(e) => {

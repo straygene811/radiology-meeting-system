@@ -185,7 +185,10 @@ export default function AdminDashboardPage() {
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiModeUsed, setAiModeUsed] = useState('');
+  const [adminMobileVoiceHint, setAdminMobileVoiceHint] = useState('');
   const recognitionRef = useRef(null);
+  const wantAdminVoiceRef = useRef(false);
+  const adminVoiceTextareaRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const timerRef = useRef(null);
   const latestRawTranscriptRef = useRef('');
@@ -784,83 +787,155 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const activateAdminMobileKeyboardDictation = (reasonMsg = '') => {
+    setAdminMobileVoiceHint(
+      reasonMsg ||
+        '📱 已為您點開下方逐字稿文字框！請直接點擊您「手機鍵盤右下角（或空白鍵旁）的 🎤 麥克風圖示」開始說話（Apple/Google 原生語音輸入最準確，且支援 LINE 與所有手機瀏覽器）！'
+    );
+    setTimeout(() => {
+      if (adminVoiceTextareaRef.current) {
+        adminVoiceTextareaRef.current.focus();
+      }
+    }, 80);
+  };
+
   const startVoiceRecording = async () => {
+    if (typeof window === 'undefined') return;
+    const ua = navigator.userAgent || '';
+    const isMobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua);
+    const isLineOrIosChrome = /Line\/|CriOS\/|FBIOS\//i.test(ua);
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    setAdminMobileVoiceHint('');
+    latestRawTranscriptRef.current = rawTranscript;
+
+    // 若為手機 LINE 內建瀏覽器或 iOS Chrome（不支援 Web Speech API），直接引導手機鍵盤 🎤 語音輸入或嘗試純錄音
+    if (!SpeechRecognition || isLineOrIosChrome) {
+      activateAdminMobileKeyboardDictation(
+        '📱 偵測到您使用手機 LINE 或 iOS Chrome 瀏覽器（Apple 限制網頁即時聽寫 API），已為您點開下方輸入框：請直接點選「手機鍵盤上的 🎤 麥克風」說話（最準確！），或使用右側「方式 B：上傳手機錄音檔」！'
+      );
+      return;
+    }
+
     setIsRecording(true);
     setRecordingSeconds(0);
     setRecordedAudioUrl(null);
-    latestRawTranscriptRef.current = rawTranscript;
+    wantAdminVoiceRef.current = true;
 
     timerRef.current = setInterval(() => {
       setRecordingSeconds((s) => s + 1);
     }, 1000);
 
-    if (typeof window !== 'undefined') {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'zh-TW';
-        recognition.continuous = true;
-        recognition.interimResults = true;
+    let speechStarted = false;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'zh-TW';
+      // 手機瀏覽器設為 continuous = false 並於 onend 自動無縫重啟，避免 iOS 中斷與 Android 重複字詞 Bug
+      recognition.continuous = !isMobile;
+      recognition.interimResults = true;
 
-        recognition.onresult = (event) => {
-          let finalSegment = '';
-          let interimSeg = '';
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const t = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              finalSegment += t + '。';
-            } else {
-              interimSeg += t;
+      recognition.onresult = (event) => {
+        let finalSegment = '';
+        let interimSeg = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const t = (event.results[i][0].transcript || '').trim();
+          if (!t) continue;
+          if (event.results[i].isFinal) {
+            finalSegment += /[。！？]$/.test(t) ? t : `${t}。`;
+          } else {
+            interimSeg += t;
+          }
+        }
+        setInterimTranscript(interimSeg);
+        if (finalSegment) {
+          setRawTranscript((prev) => {
+            const next = prev ? `${prev}\n${finalSegment}` : finalSegment;
+            latestRawTranscriptRef.current = next;
+            return next;
+          });
+        }
+      };
+
+      recognition.onerror = (event) => {
+        const errCode = event?.error || '';
+        if (errCode === 'no-speech') return;
+        if (errCode === 'not-allowed' || errCode === 'service-not-allowed' || errCode === 'audio-capture') {
+          wantAdminVoiceRef.current = false;
+          setIsRecording(false);
+          setInterimTranscript('');
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          activateAdminMobileKeyboardDictation(
+            '📱 手機瀏覽器未授權網頁麥克風（或受 iOS 限制），已為您點開下方文字框：請直接點擊「手機鍵盤右下角的 🎤 麥克風」開始說話！'
+          );
+        }
+      };
+
+      recognition.onend = () => {
+        if (wantAdminVoiceRef.current) {
+          setTimeout(() => {
+            if (!wantAdminVoiceRef.current) return;
+            try {
+              recognition.start();
+            } catch {
+              wantAdminVoiceRef.current = false;
+              setIsRecording(false);
+              setInterimTranscript('');
             }
-          }
-          setInterimTranscript(interimSeg);
-          if (finalSegment) {
-            setRawTranscript((prev) => {
-              const next = prev ? `${prev}\n${finalSegment}` : finalSegment;
-              latestRawTranscriptRef.current = next;
-              return next;
-            });
-          }
-        };
+          }, 180);
+        }
+      };
 
-        recognition.onerror = () => {};
+      try {
         recognition.start();
         recognitionRef.current = recognition;
+        speechStarted = true;
+      } catch {
+        wantAdminVoiceRef.current = false;
+        setIsRecording(false);
+        activateAdminMobileKeyboardDictation();
+        return;
       }
     }
 
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        let mediaRecorder;
-        try {
-          mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
-        } catch {
-          mediaRecorder = new MediaRecorder(stream);
-        }
-        const chunks = [];
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) chunks.push(e.data);
-        };
-        mediaRecorder.onstop = () => {
-          const blob = new Blob(chunks, { type: 'audio/webm' });
-          const url = URL.createObjectURL(blob);
-          setRecordedAudioUrl(url);
-          const reader = new FileReader();
-          reader.onload = (ev) => {
-            const b64 = String(ev.target.result || '').split(',')[1] || '';
-            setRecordedAudioBase64(b64);
+    // 注意：手機作業系統不允許 SpeechRecognition 與 getUserMedia 同時搶用麥克風，因此僅在桌面電腦或未啟動 SpeechRecognition 時同步錄音
+    if (!isMobile || !speechStarted) {
+      try {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          let mediaRecorder;
+          try {
+            mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+          } catch {
+            mediaRecorder = new MediaRecorder(stream);
+          }
+          const chunks = [];
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunks.push(e.data);
           };
-          reader.readAsDataURL(blob);
-          stream.getTracks().forEach((track) => track.stop());
-        };
-        mediaRecorder.start();
-        mediaRecorderRef.current = mediaRecorder;
-      }
-    } catch {}
+          mediaRecorder.onstop = () => {
+            const blob = new Blob(chunks, { type: 'audio/webm' });
+            const url = URL.createObjectURL(blob);
+            setRecordedAudioUrl(url);
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const b64 = String(ev.target.result || '').split(',')[1] || '';
+              setRecordedAudioBase64(b64);
+            };
+            reader.readAsDataURL(blob);
+            stream.getTracks().forEach((track) => track.stop());
+          };
+          mediaRecorder.start();
+          mediaRecorderRef.current = mediaRecorder;
+        }
+      } catch {}
+    }
   };
 
   const stopVoiceRecording = (autoPolish = false) => {
+    wantAdminVoiceRef.current = false;
     setIsRecording(false);
     setInterimTranscript('');
     if (timerRef.current) {
@@ -3569,7 +3644,7 @@ export default function AdminDashboardPage() {
                 開會時將手機或筆電放於桌面，點擊開始錄音即可即時辨識繁體中文並轉出逐字稿。
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
                 {!isRecording ? (
                   <button type="button" onClick={startVoiceRecording} className="btn" style={{ background: '#dc2626' }}>
                     <Mic size={17} /> 開始現場即時錄音辨識
@@ -3579,6 +3654,21 @@ export default function AdminDashboardPage() {
                     <MicOff size={17} /> 停止錄音並自動修正詞句 ({recordingSeconds} 秒)
                   </button>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => activateAdminMobileKeyboardDictation()}
+                  className="btn btn-secondary"
+                  style={{
+                    fontSize: '0.8rem',
+                    padding: '0.45rem 0.75rem',
+                    background: '#fffbeb',
+                    color: '#b45309',
+                    borderColor: '#fcd34d'
+                  }}
+                >
+                  ⌨️ 手機鍵盤「🎤語音輸入」(LINE/iOS最準)
+                </button>
 
                 {recordedAudioUrl && (
                   <a
@@ -3832,6 +3922,34 @@ export default function AdminDashboardPage() {
             </div>
           )}
 
+          {adminMobileVoiceHint && (
+            <div
+              style={{
+                marginBottom: '0.75rem',
+                padding: '0.6rem 0.9rem',
+                background: '#fffbeb',
+                border: '1.5px solid #f59e0b',
+                borderRadius: '10px',
+                fontSize: '0.85rem',
+                color: '#92400e',
+                fontWeight: 600,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <span>{adminMobileVoiceHint}</span>
+              <button
+                type="button"
+                onClick={() => setAdminMobileVoiceHint('')}
+                style={{ background: 'transparent', border: 'none', color: '#92400e', fontWeight: 800, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           <div className="form-group">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.4rem' }}>
               <label style={{ margin: 0 }}>3. 會議語音逐字稿 / 現場口語速記內容（支援講完後一鍵修正詞句，亦可直接打字修改）</label>
@@ -3846,6 +3964,7 @@ export default function AdminDashboardPage() {
               </button>
             </div>
             <textarea
+              ref={adminVoiceTextareaRef}
               rows={6}
               value={rawTranscript}
               onChange={(e) => {
