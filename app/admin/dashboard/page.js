@@ -26,6 +26,7 @@ import {
   Image as ImageIcon,
   RefreshCw,
   FileAudio,
+  Cloud,
   CloudUpload,
   Eye,
   BookOpen,
@@ -185,9 +186,11 @@ export default function AdminDashboardPage() {
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiModeUsed, setAiModeUsed] = useState('');
+  const [adminVoiceStatus, setAdminVoiceStatus] = useState('idle'); // 'idle' | 'starting' | 'listening' | 'paused' | 'keyboard_mode'
   const [adminMobileVoiceHint, setAdminMobileVoiceHint] = useState('');
   const recognitionRef = useRef(null);
   const wantAdminVoiceRef = useRef(false);
+  const adminSessionBaseTextRef = useRef('');
   const adminVoiceTextareaRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const timerRef = useRef(null);
@@ -788,15 +791,22 @@ export default function AdminDashboardPage() {
   };
 
   const activateAdminMobileKeyboardDictation = (reasonMsg = '') => {
+    wantAdminVoiceRef.current = false;
+    setIsRecording(false);
+    setAdminVoiceStatus('keyboard_mode');
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
     setAdminMobileVoiceHint(
       reasonMsg ||
-        '📱 已為您點開下方逐字稿文字框！請直接點擊您「手機鍵盤右下角（或空白鍵旁）的 🎤 麥克風圖示」開始說話（Apple/Google 原生語音輸入最準確，且支援 LINE 與所有手機瀏覽器）！'
+        '🟢【手機鍵盤語音模式作用中】下方文字框已點開！請直接點擊您「手機鍵盤右下角（或空白鍵旁）的 🎤 麥克風圖示」開始說話（使用手機原生語音輸入，免權限、不斷線且最準確）！'
     );
-    setTimeout(() => {
-      if (adminVoiceTextareaRef.current) {
+    if (adminVoiceTextareaRef.current) {
+      try {
         adminVoiceTextareaRef.current.focus();
-      }
-    }, 80);
+      } catch {}
+    }
   };
 
   const startVoiceRecording = async () => {
@@ -804,24 +814,38 @@ export default function AdminDashboardPage() {
     const ua = navigator.userAgent || '';
     const isMobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua);
     const isLineOrIosChrome = /Line\/|CriOS\/|FBIOS\//i.test(ua);
+    const isNonHttpsRemote =
+      window.location.protocol !== 'https:' &&
+      window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1';
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     setAdminMobileVoiceHint('');
+    adminSessionBaseTextRef.current = (rawTranscript || '').trim();
     latestRawTranscriptRef.current = rawTranscript;
 
-    // 若為手機 LINE 內建瀏覽器或 iOS Chrome（不支援 Web Speech API），直接引導手機鍵盤 🎤 語音輸入或嘗試純錄音
+    if (isNonHttpsRemote) {
+      activateAdminMobileKeyboardDictation(
+        `🟢【手機鍵盤語音模式作用中】因目前為區網網址 (${window.location.origin})，手機規定僅 HTTPS 正式網址可開啟網頁麥克風；已自動為您點開下方文字框，請直接按「手機鍵盤右下角的 🎤 麥克風」說話（效果完全一樣且更準）！`
+      );
+      return;
+    }
+
+    // 若為手機 LINE 內建瀏覽器或 iOS Chrome（不支援 Web Speech API），直接引導手機鍵盤 🎤 語音輸入
     if (!SpeechRecognition || isLineOrIosChrome) {
       activateAdminMobileKeyboardDictation(
-        '📱 偵測到您使用手機 LINE 或 iOS Chrome 瀏覽器（Apple 限制網頁即時聽寫 API），已為您點開下方輸入框：請直接點選「手機鍵盤上的 🎤 麥克風」說話（最準確！），或使用右側「方式 B：上傳手機錄音檔」！'
+        '🟢【手機鍵盤語音模式作用中】偵測到您使用手機 LINE 或 iOS Chrome 瀏覽器（Apple 限制網頁麥克風 API），已自動為您點開下方輸入框：請直接點選「手機鍵盤右下角的 🎤 麥克風」說話（最準確！），或使用「方式 B：上傳手機錄音檔」！'
       );
       return;
     }
 
     setIsRecording(true);
+    setAdminVoiceStatus('starting');
     setRecordingSeconds(0);
     setRecordedAudioUrl(null);
     wantAdminVoiceRef.current = true;
 
+    if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       setRecordingSeconds((s) => s + 1);
     }, 1000);
@@ -830,61 +854,77 @@ export default function AdminDashboardPage() {
     if (SpeechRecognition) {
       const recognition = new SpeechRecognition();
       recognition.lang = 'zh-TW';
-      // 手機瀏覽器設為 continuous = false 並於 onend 自動無縫重啟，避免 iOS 中斷與 Android 重複字詞 Bug
-      recognition.continuous = !isMobile;
+      recognition.continuous = true;
       recognition.interimResults = true;
 
+      recognition.onstart = () => {
+        setAdminVoiceStatus('listening');
+      };
+
+      recognition.onaudiostart = () => {
+        setAdminVoiceStatus('listening');
+      };
+
       recognition.onresult = (event) => {
-        let finalSegment = '';
+        setAdminVoiceStatus('listening');
+        const finalPieces = [];
         let interimSeg = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
+        for (let i = 0; i < event.results.length; i++) {
           const t = (event.results[i][0].transcript || '').trim();
           if (!t) continue;
           if (event.results[i].isFinal) {
-            finalSegment += /[。！？]$/.test(t) ? t : `${t}。`;
+            const prevPiece = finalPieces.length > 0 ? finalPieces[finalPieces.length - 1] : '';
+            const cleanPrev = prevPiece.replace(/[。！？]$/, '');
+            if (cleanPrev && t.startsWith(cleanPrev) && t.length >= cleanPrev.length) {
+              finalPieces[finalPieces.length - 1] = /[。！？]$/.test(t) ? t : `${t}。`;
+            } else if (t !== cleanPrev) {
+              finalPieces.push(/[。！？]$/.test(t) ? t : `${t}。`);
+            }
           } else {
             interimSeg += t;
           }
         }
         setInterimTranscript(interimSeg);
-        if (finalSegment) {
-          setRawTranscript((prev) => {
-            const next = prev ? `${prev}\n${finalSegment}` : finalSegment;
-            latestRawTranscriptRef.current = next;
-            return next;
-          });
+        if (finalPieces.length > 0) {
+          const sessionJoined = finalPieces.join('');
+          const base = adminSessionBaseTextRef.current;
+          const combined = base ? `${base}\n${sessionJoined}` : sessionJoined;
+          setRawTranscript(combined);
+          latestRawTranscriptRef.current = combined;
         }
       };
 
       recognition.onerror = (event) => {
-        const errCode = event?.error || '';
+        const errCode = event?.error || 'unknown';
         if (errCode === 'no-speech') return;
-        if (errCode === 'not-allowed' || errCode === 'service-not-allowed' || errCode === 'audio-capture') {
-          wantAdminVoiceRef.current = false;
-          setIsRecording(false);
-          setInterimTranscript('');
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          activateAdminMobileKeyboardDictation(
-            '📱 手機瀏覽器未授權網頁麥克風（或受 iOS 限制），已為您點開下方文字框：請直接點擊「手機鍵盤右下角的 🎤 麥克風」開始說話！'
-          );
+        wantAdminVoiceRef.current = false;
+        setIsRecording(false);
+        setInterimTranscript('');
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
         }
+        activateAdminMobileKeyboardDictation(
+          `🟢【已自動切換為手機鍵盤語音模式】手機瀏覽器回報網頁麥克風受限 (${errCode})，已為您點開下方文字框：請直接點擊「手機鍵盤右下角的 🎤 麥克風」開始說話！`
+        );
       };
 
       recognition.onend = () => {
         if (wantAdminVoiceRef.current) {
-          setTimeout(() => {
-            if (!wantAdminVoiceRef.current) return;
-            try {
-              recognition.start();
-            } catch {
-              wantAdminVoiceRef.current = false;
-              setIsRecording(false);
-              setInterimTranscript('');
+          try {
+            adminSessionBaseTextRef.current = (latestRawTranscriptRef.current || '').trim();
+            recognition.start();
+            setAdminVoiceStatus('listening');
+          } catch {
+            wantAdminVoiceRef.current = false;
+            setIsRecording(false);
+            setAdminVoiceStatus('paused');
+            setInterimTranscript('');
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
             }
-          }, 180);
+          }
         }
       };
 
@@ -937,6 +977,7 @@ export default function AdminDashboardPage() {
   const stopVoiceRecording = (autoPolish = false) => {
     wantAdminVoiceRef.current = false;
     setIsRecording(false);
+    setAdminVoiceStatus('idle');
     setInterimTranscript('');
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -3868,23 +3909,78 @@ export default function AdminDashboardPage() {
             </button>
           </div>
 
-          {isRecording && (
-            <div
-              style={{
-                marginBottom: '0.75rem',
-                padding: '0.6rem 0.9rem',
-                background: '#fef2f2',
-                border: '1px solid #fecaca',
-                borderRadius: '10px',
-                fontSize: '0.88rem',
-                color: '#991b1b',
-                fontWeight: 600
-              }}
-            >
-              🎙️ 正在即時聽寫中（講完按「停止錄音」即會自動幫您修正同音錯字與通順詞句）：
-              <span style={{ color: '#0f172a', marginLeft: '0.4rem' }}>{interimTranscript || '請對著麥克風說話...'}</span>
+          {/* 恆常顯示之「語音功能運作狀態指示列」 */}
+          <div
+            style={{
+              marginBottom: '0.75rem',
+              padding: '0.6rem 0.9rem',
+              borderRadius: '10px',
+              fontSize: '0.86rem',
+              fontWeight: 700,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '0.5rem',
+              background:
+                isRecording
+                  ? '#fef2f2'
+                  : adminVoiceStatus === 'keyboard_mode'
+                  ? '#ecfdf5'
+                  : adminVoiceStatus === 'paused'
+                  ? '#fffbeb'
+                  : '#f8fafc',
+              border:
+                isRecording
+                  ? '2px solid #ef4444'
+                  : adminVoiceStatus === 'keyboard_mode'
+                  ? '2px solid #10b981'
+                  : adminVoiceStatus === 'paused'
+                  ? '2px solid #f59e0b'
+                  : '1px solid #cbd5e1',
+              color:
+                isRecording
+                  ? '#991b1b'
+                  : adminVoiceStatus === 'keyboard_mode'
+                  ? '#065f46'
+                  : adminVoiceStatus === 'paused'
+                  ? '#92400e'
+                  : '#475569'
+            }}
+          >
+            <div>
+              {isRecording ? (
+                <>
+                  🔴 <strong>語音狀態：【麥克風收音作用中（已啟動 {recordingSeconds} 秒）】</strong> — 請直接對著麥克風說話！即時聽寫：
+                  <span style={{ color: '#0f172a', marginLeft: '0.4rem', textDecoration: 'underline' }}>
+                    {interimTranscript || '正在聆聽您的聲音...'}
+                  </span>
+                </>
+              ) : adminVoiceStatus === 'keyboard_mode' ? (
+                <>
+                  🟢 <strong>語音狀態：【手機鍵盤「🎤語音輸入」模式作用中】</strong> — 下方輸入框已開啟，請直接點擊您<strong>手機鍵盤右下角的「🎤 麥克風」</strong>說話！
+                </>
+              ) : adminVoiceStatus === 'paused' ? (
+                <>
+                  ⏸️ <strong>語音狀態：【手機偵測到停頓已暫停收音】</strong> — 前段文字已保留，可點右側按鈕繼續說下一句，或改用手機鍵盤 🎤 語音輸入！
+                </>
+              ) : (
+                <>
+                  ⚪ <strong>語音狀態：待命（尚未啟動）</strong> — 點選上方「開始現場即時錄音辨識」或「⌨️ 手機鍵盤🎤語音輸入」即可開始說話
+                </>
+              )}
             </div>
-          )}
+            {adminVoiceStatus === 'paused' && (
+              <button
+                type="button"
+                onClick={startVoiceRecording}
+                className="btn"
+                style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem', background: '#dc2626', color: '#fff' }}
+              >
+                🎙️ 點此繼續收音
+              </button>
+            )}
+          </div>
 
           {transcriptCorrections.length > 0 && (
             <div
@@ -3971,7 +4067,21 @@ export default function AdminDashboardPage() {
                 setRawTranscript(e.target.value);
                 latestRawTranscriptRef.current = e.target.value;
               }}
-              placeholder="點擊上方「開始現場即時錄音辨識」邊開會邊自動轉文字；講完後系統會自動修正同音錯字（如：林怡貞➔林宜蓁、評保➔品保、千屏風➔鉛屏風、梅那麼➔沒那麼），您也可點右上角「🪄 講完後：智慧修正錯別字與潤飾詞句」或手動微調！"
+              placeholder="點擊上方「開始現場即時錄音辨識」或「⌨️ 手機鍵盤🎤語音輸入」邊開會邊自動轉文字；講完後系統會自動修正同音錯字（如：林怡貞➔林宜蓁、評保➔品保、千屏風➔鉛屏風、梅那麼➔沒那麼），您也可點右上角「🪄 講完後：智慧修正錯別字與潤飾詞句」或手動微調！"
+              style={{
+                border:
+                  isRecording
+                    ? '2.5px solid #ef4444'
+                    : adminVoiceStatus === 'keyboard_mode'
+                    ? '2.5px solid #10b981'
+                    : undefined,
+                background:
+                  isRecording
+                    ? '#fff5f5'
+                    : adminVoiceStatus === 'keyboard_mode'
+                    ? '#f0fdf4'
+                    : '#ffffff'
+              }}
             />
           </div>
 

@@ -154,6 +154,8 @@ export default function HomePage() {
   const [voiceCorrections, setVoiceCorrections] = useState([]);
   const [polishingVoice, setPolishingVoice] = useState(false);
   const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState('idle'); // 'idle' | 'starting' | 'listening' | 'paused' | 'keyboard_mode'
+  const [voiceTimerSeconds, setVoiceTimerSeconds] = useState(0);
   const [mobileVoiceHint, setMobileVoiceHint] = useState('');
   const [frontendAudioBase64, setFrontendAudioBase64] = useState(null);
   const [frontendAudioMime, setFrontendAudioMime] = useState('audio/mp4');
@@ -166,6 +168,8 @@ export default function HomePage() {
   const [savingFrontendDraftInbox, setSavingFrontendDraftInbox] = useState(false);
   const speechRecRef = useRef(null);
   const wantVoiceListeningRef = useRef(false);
+  const voiceTimerRef = useRef(null);
+  const sessionBaseTextRef = useRef('');
   const voiceTextareaRef = useRef(null);
   const frontendMediaRecorderRef = useRef(null);
   const frontendAudioTimerRef = useRef(null);
@@ -795,16 +799,28 @@ export default function HomePage() {
     }
   };
 
+  const stopVoiceTimer = () => {
+    if (voiceTimerRef.current) {
+      clearInterval(voiceTimerRef.current);
+      voiceTimerRef.current = null;
+    }
+  };
+
   const activateMobileKeyboardDictation = (reasonMsg = '') => {
+    stopVoiceTimer();
+    wantVoiceListeningRef.current = false;
+    setIsVoiceListening(false);
+    setVoiceStatus('keyboard_mode');
     setMobileVoiceHint(
       reasonMsg ||
-        '📱 已為您點開下方文字框！請直接點擊您「手機鍵盤右下角（或空白鍵旁）的 🎤 麥克風圖示」開始說話（Apple/Google 原生語音輸入最準確，且支援 LINE 與所有手機瀏覽器）！'
+        '🟢【手機鍵盤語音模式作用中】下方文字框已點開！請直接點擊您「手機鍵盤右下角（或空白鍵旁）的 🎤 麥克風圖示」開始說話（使用手機原生語音輸入，免權限、不斷線且最準確）！'
     );
-    setTimeout(() => {
-      if (voiceTextareaRef.current) {
+    // 必須於使用者點擊事件中同步執行 focus()，手機虛擬鍵盤才會立刻彈出
+    if (voiceTextareaRef.current) {
+      try {
         voiceTextareaRef.current.focus();
-      }
-    }, 80);
+      } catch {}
+    }
   };
 
   const toggleFrontendPureAudioRecorder = async () => {
@@ -823,7 +839,9 @@ export default function HomePage() {
     }
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      alert('目前瀏覽器不支援直接錄音，請點選「📂 上傳手機錄音檔」或使用手機鍵盤 🎤 語音輸入！');
+      activateMobileKeyboardDictation(
+        '📱 目前瀏覽器環境（如非 HTTPS 區網網址或 LINE 內建瀏覽器）不開放網頁直接錄音，已自動為您切換為「🟢 手機鍵盤 🎤 語音輸入模式」：請直接按手機鍵盤上的 🎤 麥克風說話，或點選「📂 選取手機錄音檔」！'
+      );
       return;
     }
 
@@ -875,7 +893,7 @@ export default function HomePage() {
       }, 1000);
     } catch (err) {
       activateMobileKeyboardDictation(
-        '📱 您的手機瀏覽器（如 LINE 內建瀏覽器）限制網頁直接存取麥克風，已自動為您點開下方文字框：請直接按「手機鍵盤右下角的 🎤 麥克風」講話，或點選「📂 上傳手機錄音檔」！'
+        '📱 您的手機瀏覽器限制網頁直接存取麥克風，已自動為您切換為「🟢 手機鍵盤 🎤 語音輸入模式」：請直接按「手機鍵盤右下角的 🎤 麥克風」講話，或點選「📂 選取手機錄音檔」！'
       );
     }
   };
@@ -900,12 +918,14 @@ export default function HomePage() {
   const toggleFrontendVoiceRecognition = () => {
     if (isVoiceListening || wantVoiceListeningRef.current) {
       wantVoiceListeningRef.current = false;
+      stopVoiceTimer();
       if (speechRecRef.current) {
         try {
           speechRecRef.current.stop();
         } catch {}
       }
       setIsVoiceListening(false);
+      setVoiceStatus('idle');
       setVoiceInterimText('');
       // 講完停止錄音時，自動觸發「智慧修正錯別字與潤飾詞句」
       if (latestVoiceTextRef.current?.trim()) {
@@ -916,78 +936,111 @@ export default function HomePage() {
 
     if (typeof window === 'undefined') return;
     const ua = navigator.userAgent || '';
-    const isMobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua);
     const isLineOrIosChrome = /Line\/|CriOS\/|FBIOS\//i.test(ua);
+    const isNonHttpsRemote =
+      window.location.protocol !== 'https:' &&
+      window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1';
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-    if (!SpeechRec || isLineOrIosChrome) {
+    if (isNonHttpsRemote) {
       activateMobileKeyboardDictation(
-        '📱 偵測到您使用手機 LINE 或 iOS Chrome 瀏覽器（Apple 限制網頁即時聽寫 API），已為您點開下方輸入框：請直接點選「手機鍵盤上的 🎤 麥克風」說話（辨識最準確！），或點選上方「🎵 手機錄音檔」按鈕！'
+        `🟢【手機鍵盤語音模式作用中】因目前為區網網址 (${window.location.origin})，手機規定僅 HTTPS 正式網址可開啟網頁麥克風；已自動為您點開下方文字框，請直接按「手機鍵盤右下角的 🎤 麥克風」說話（效果完全一樣且更準）！`
       );
       return;
     }
 
+    if (!SpeechRec || isLineOrIosChrome) {
+      activateMobileKeyboardDictation(
+        '🟢【手機鍵盤語音模式作用中】偵測到您使用 LINE 或 iOS Chrome（Apple 限制網頁麥克風 API），已自動為您點開下方文字框：請直接點選「手機鍵盤右下角的 🎤 麥克風」說話（辨識最準確！），或點選「📂 選取手機錄音檔」！'
+      );
+      return;
+    }
+
+    sessionBaseTextRef.current = (voiceQuickText || '').trim();
     latestVoiceTextRef.current = voiceQuickText;
     wantVoiceListeningRef.current = true;
     setMobileVoiceHint('');
+    setIsVoiceListening(true);
+    setVoiceStatus('starting');
+    setVoiceTimerSeconds(0);
+    stopVoiceTimer();
+    voiceTimerRef.current = setInterval(() => {
+      setVoiceTimerSeconds((s) => s + 1);
+    }, 1000);
 
     const rec = new SpeechRec();
     rec.lang = 'zh-TW';
-    // 手機瀏覽器設為 continuous = false 並於 onend 自動無縫重啟，可徹底解決 iOS 斷線與 Android 重複疊字 Bug
-    rec.continuous = !isMobile;
+    rec.continuous = true;
     rec.interimResults = true;
 
+    rec.onstart = () => {
+      setVoiceStatus('listening');
+    };
+
+    rec.onaudiostart = () => {
+      setVoiceStatus('listening');
+    };
+
     rec.onresult = (event) => {
-      let finalChunk = '';
+      setVoiceStatus('listening');
+      const finalPieces = [];
       let interimChunk = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      for (let i = 0; i < event.results.length; i++) {
         const t = (event.results[i][0].transcript || '').trim();
         if (!t) continue;
         if (event.results[i].isFinal) {
-          finalChunk += /[。！？]$/.test(t) ? t : `${t}。`;
+          // 防止部分 Android 手機在 continuous 模式下回傳累積重複字串
+          const prevPiece = finalPieces.length > 0 ? finalPieces[finalPieces.length - 1] : '';
+          const cleanPrev = prevPiece.replace(/[。！？]$/, '');
+          if (cleanPrev && t.startsWith(cleanPrev) && t.length >= cleanPrev.length) {
+            finalPieces[finalPieces.length - 1] = /[。！？]$/.test(t) ? t : `${t}。`;
+          } else if (t !== cleanPrev) {
+            finalPieces.push(/[。！？]$/.test(t) ? t : `${t}。`);
+          }
         } else {
           interimChunk += t;
         }
       }
       setVoiceInterimText(interimChunk);
-      if (finalChunk) {
-        setVoiceQuickText((prev) => {
-          const next = prev ? `${prev}\n${finalChunk}` : finalChunk;
-          latestVoiceTextRef.current = next;
-          return next;
-        });
+      if (finalPieces.length > 0) {
+        const sessionJoined = finalPieces.join('');
+        const base = sessionBaseTextRef.current;
+        const combined = base ? `${base}\n${sessionJoined}` : sessionJoined;
+        setVoiceQuickText(combined);
+        latestVoiceTextRef.current = combined;
       }
     };
 
     rec.onerror = (event) => {
-      const errCode = event?.error || '';
+      const errCode = event?.error || 'unknown';
       if (errCode === 'no-speech') {
-        // 手機短暫停頓無聲音時不中斷，交由 onend 自動重啟
         return;
       }
-      if (errCode === 'not-allowed' || errCode === 'service-not-allowed' || errCode === 'audio-capture') {
-        wantVoiceListeningRef.current = false;
-        setIsVoiceListening(false);
-        setVoiceInterimText('');
-        activateMobileKeyboardDictation(
-          '📱 手機瀏覽器未開啟網頁麥克風權限（或受 iOS 限制），已自動為您點開下方文字框：請直接按「手機鍵盤右下角的 🎤 麥克風」開始說話，或使用「🎵 手機錄音檔」功能！'
-        );
-      }
+      wantVoiceListeningRef.current = false;
+      stopVoiceTimer();
+      setIsVoiceListening(false);
+      setVoiceInterimText('');
+      activateMobileKeyboardDictation(
+        `🟢【已自動切換為手機鍵盤語音模式】您的手機瀏覽器回報網頁麥克風受限 (${errCode})，已為您點開下方文字框：請直接按「手機鍵盤右下角的 🎤 麥克風」說話，或點選「🎵 錄製語音檔 / 📂 選取手機錄音檔」！`
+      );
     };
 
     rec.onend = () => {
       if (wantVoiceListeningRef.current) {
-        setTimeout(() => {
-          if (!wantVoiceListeningRef.current) return;
-          try {
-            rec.start();
-          } catch {
-            wantVoiceListeningRef.current = false;
-            setIsVoiceListening(false);
-            setVoiceInterimText('');
-          }
-        }, 180);
+        try {
+          sessionBaseTextRef.current = (latestVoiceTextRef.current || '').trim();
+          rec.start();
+          setVoiceStatus('listening');
+        } catch {
+          wantVoiceListeningRef.current = false;
+          stopVoiceTimer();
+          setIsVoiceListening(false);
+          setVoiceStatus('paused');
+          setVoiceInterimText('');
+        }
       } else {
+        stopVoiceTimer();
         setIsVoiceListening(false);
         setVoiceInterimText('');
       }
@@ -996,9 +1049,9 @@ export default function HomePage() {
     speechRecRef.current = rec;
     try {
       rec.start();
-      setIsVoiceListening(true);
-    } catch {
+    } catch (err) {
       wantVoiceListeningRef.current = false;
+      stopVoiceTimer();
       setIsVoiceListening(false);
       activateMobileKeyboardDictation();
     }
@@ -3189,7 +3242,7 @@ export default function HomePage() {
                   >
                     {isVoiceListening ? (
                       <>
-                        <MicOff size={15} /> 停止錄音（並自動校正詞句）
+                        <MicOff size={15} /> 🔴 語音收音作用中 ({voiceTimerSeconds}秒) — 點此停止
                       </>
                     ) : (
                       <>
@@ -3204,13 +3257,14 @@ export default function HomePage() {
                     style={{
                       padding: '0.38rem 0.8rem',
                       fontSize: '0.82rem',
-                      background: '#fffbeb',
-                      color: '#b45309',
-                      borderColor: '#fcd34d'
+                      background: voiceStatus === 'keyboard_mode' ? '#10b981' : '#fffbeb',
+                      color: voiceStatus === 'keyboard_mode' ? '#ffffff' : '#b45309',
+                      borderColor: voiceStatus === 'keyboard_mode' ? '#059669' : '#fcd34d',
+                      fontWeight: 700
                     }}
                     title="iPhone / Android / LINE 瀏覽器最推薦：點擊後直接按手機鍵盤右下角的 🎤 麥克風說話"
                   >
-                    ⌨️ 手機鍵盤「🎤語音輸入」(LINE/iOS最準)
+                    ⌨️ {voiceStatus === 'keyboard_mode' ? '🟢 手機鍵盤語音模式作用中' : '手機鍵盤「🎤語音輸入」(LINE/iOS最準)'}
                   </button>
                   <button
                     type="button"
@@ -3224,7 +3278,7 @@ export default function HomePage() {
                       borderColor: isFrontendAudioRecording ? '#dc2626' : '#cbd5e1'
                     }}
                   >
-                    {isFrontendAudioRecording ? `⏹️ 停止手機錄音 (${frontendAudioSeconds}秒)` : '🎵 錄製語音檔'}
+                    {isFrontendAudioRecording ? `⏹️ 正在錄音作用中 (${frontendAudioSeconds}秒)` : '🎵 錄製語音檔'}
                   </button>
                   <label
                     className="btn btn-secondary"
@@ -3308,6 +3362,84 @@ export default function HomePage() {
                 </div>
               </div>
 
+              {/* 恆常顯示之「語音功能運作狀態指示列」：清楚標示目前是否正在收音或待命 */}
+              <div
+                style={{
+                  marginBottom: '0.55rem',
+                  padding: '0.5rem 0.8rem',
+                  borderRadius: '8px',
+                  fontSize: '0.83rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  background:
+                    isVoiceListening || isFrontendAudioRecording
+                      ? '#fef2f2'
+                      : voiceStatus === 'keyboard_mode'
+                      ? '#ecfdf5'
+                      : voiceStatus === 'paused'
+                      ? '#fffbeb'
+                      : '#f8fafc',
+                  border:
+                    isVoiceListening || isFrontendAudioRecording
+                      ? '2px solid #ef4444'
+                      : voiceStatus === 'keyboard_mode'
+                      ? '2px solid #10b981'
+                      : voiceStatus === 'paused'
+                      ? '2px solid #f59e0b'
+                      : '1px solid #cbd5e1',
+                  color:
+                    isVoiceListening || isFrontendAudioRecording
+                      ? '#991b1b'
+                      : voiceStatus === 'keyboard_mode'
+                      ? '#065f46'
+                      : voiceStatus === 'paused'
+                      ? '#92400e'
+                      : '#475569'
+                }}
+              >
+                <div>
+                  {isFrontendAudioRecording ? (
+                    <>
+                      🔴 <strong>語音狀態：【正在錄製手機語音檔（已錄 {frontendAudioSeconds} 秒）】</strong> — 請對著手機說話，錄完點上方「⏹️ 正在錄音作用中」停止！
+                    </>
+                  ) : isVoiceListening ? (
+                    <>
+                      🔴 <strong>語音狀態：【麥克風收音作用中（已啟動 {voiceTimerSeconds} 秒）】</strong> — 請直接說話！即時聽寫：
+                      <span style={{ color: '#0f172a', marginLeft: '0.3rem', textDecoration: 'underline' }}>
+                        {voiceInterimText || '正在聆聽您的聲音...'}
+                      </span>
+                    </>
+                  ) : voiceStatus === 'keyboard_mode' ? (
+                    <>
+                      🟢 <strong>語音狀態：【手機鍵盤「🎤語音輸入」模式作用中】</strong> — 下方輸入框已開啟，請直接點擊您<strong>手機鍵盤右下角的「🎤 麥克風」</strong>說話！
+                    </>
+                  ) : voiceStatus === 'paused' ? (
+                    <>
+                      ⏸️ <strong>語音狀態：【手機偵測到停頓已暫停收音】</strong> — 前段文字已保留，可點右側按鈕繼續說下一句，或改用手機鍵盤 🎤 語音輸入！
+                    </>
+                  ) : (
+                    <>
+                      ⚪ <strong>語音狀態：待命（尚未啟動）</strong> — 點選上方「1. 開始麥克風語音轉文字」或「⌨️ 手機鍵盤🎤語音輸入」即可開始說話
+                    </>
+                  )}
+                </div>
+
+                {voiceStatus === 'paused' && (
+                  <button
+                    type="button"
+                    onClick={toggleFrontendVoiceRecognition}
+                    className="btn"
+                    style={{ padding: '0.25rem 0.7rem', fontSize: '0.78rem', background: '#dc2626', color: '#fff' }}
+                  >
+                    🎙️ 點此繼續收音
+                  </button>
+                )}
+              </div>
+
               {mobileVoiceHint && (
                 <div
                   style={{
@@ -3316,7 +3448,7 @@ export default function HomePage() {
                     background: '#fffbeb',
                     border: '1.5px solid #f59e0b',
                     borderRadius: '8px',
-                    fontSize: '0.83rem',
+                    fontSize: '0.82rem',
                     color: '#92400e',
                     fontWeight: 600,
                     display: 'flex',
@@ -3415,24 +3547,6 @@ export default function HomePage() {
                 </div>
               )}
 
-              {isVoiceListening && (
-                <div
-                  style={{
-                    marginBottom: '0.5rem',
-                    padding: '0.45rem 0.75rem',
-                    background: '#fef2f2',
-                    border: '1px solid #fecaca',
-                    borderRadius: '8px',
-                    fontSize: '0.83rem',
-                    color: '#991b1b',
-                    fontWeight: 600
-                  }}
-                >
-                  🎙️ 正在即時聽寫中（講完按「停止錄音」即會自動修正同音錯字與通順詞句）：
-                  <span style={{ color: '#0f172a', marginLeft: '0.35rem' }}>{voiceInterimText || '請開始說話...'}</span>
-                </div>
-              )}
-
               {voiceCorrections.length > 0 && (
                 <div
                   style={{
@@ -3477,8 +3591,22 @@ export default function HomePage() {
                   setVoiceQuickText(e.target.value);
                   latestVoiceTextRef.current = e.target.value;
                 }}
-                placeholder="點擊「1. 開始麥克風語音轉文字」直接說話，講完可點「2. 🪄 智慧修正錯別字與詞句」（自動修正如：林怡貞➔林宜蓁、評保➔品保、千屏風➔鉛屏風、梅那麼➔沒那麼），也可以直接在這裡手動修改任何字句！"
-                style={{ fontSize: '0.88rem' }}
+                placeholder="點擊「1. 開始麥克風語音轉文字」或「⌨️ 手機鍵盤🎤語音輸入」直接說話，講完可點「2. 🪄 智慧修正錯別字與手寫潤飾」（自動修正如：林怡貞➔林宜蓁、評保➔品保、千屏風➔鉛屏風），也可以直接在這裡手動修改任何字句！"
+                style={{
+                  fontSize: '0.9rem',
+                  border:
+                    isVoiceListening
+                      ? '2.5px solid #ef4444'
+                      : voiceStatus === 'keyboard_mode'
+                      ? '2.5px solid #10b981'
+                      : undefined,
+                  background:
+                    isVoiceListening
+                      ? '#fff5f5'
+                      : voiceStatus === 'keyboard_mode'
+                      ? '#f0fdf4'
+                      : '#ffffff'
+                }}
               />
             </div>
 
