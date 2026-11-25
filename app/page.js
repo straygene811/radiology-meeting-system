@@ -854,10 +854,11 @@ export default function HomePage() {
     files.forEach((file) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
+        const rawDataUrl = ev.target.result;
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const maxW = 1280;
+          const maxW = 960;
           let w = img.width;
           let h = img.height;
           if (w > maxW) {
@@ -868,7 +869,7 @@ export default function HomePage() {
           canvas.height = h;
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, w, h);
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
           const base64 = String(compressedDataUrl).split(',')[1] || '';
           setFrontendHandwrittenImages((prev) => [
             ...prev,
@@ -881,12 +882,26 @@ export default function HomePage() {
             }
           ]);
         };
-        img.src = ev.target.result;
+        img.onerror = () => {
+          // 若瀏覽器無法以 canvas 轉碼（如部分手機格式），仍保留原始檔案供儲存
+          const b64 = String(rawDataUrl || '').split(',')[1] || '';
+          setFrontendHandwrittenImages((prev) => [
+            ...prev,
+            {
+              id: `FHW-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              name: file.name,
+              mimeType: file.type || 'image/jpeg',
+              base64: b64,
+              dataUrl: rawDataUrl
+            }
+          ]);
+        };
+        img.src = rawDataUrl;
       };
       reader.readAsDataURL(file);
     });
 
-    showToast(`📷 已載入 ${files.length} 張手寫稿照片，可點選「2. 智慧修正與手寫潤飾」或「3. 一鍵轉成正式議程與決議」！`);
+    showToast(`📷 已載入 ${files.length} 張手寫稿照片（儲存會議紀錄或暫存雲端時將一併保存）！`);
     e.target.value = '';
   };
 
@@ -1203,12 +1218,21 @@ export default function HomePage() {
           date: staffDraftMeeting?.date || new Date().toISOString().slice(0, 10),
           createdBy: currentUser?.name || staffDraftMeeting?.recorder || '科內紀錄人',
           transcript: voiceQuickText,
-          handwrittenImages: frontendHandwrittenImages,
+          handwrittenImages: frontendHandwrittenImages.map((img) => ({
+            id: img.id,
+            name: img.name,
+            mimeType: img.mimeType,
+            dataUrl: img.dataUrl
+          })),
           audioBase64: frontendAudioBase64,
           audioMimeType: frontendAudioMime,
           audioFileName: frontendAudioName
         })
       });
+      if (res.status === 413) {
+        alert('上傳的圖片或錄音檔總容量超過單次上限 (4.5MB)，請減少單次照片張數或分批上傳！');
+        return;
+      }
       const data = await res.json();
       if (res.ok && data.success) {
         showToast(data.message || '☁️ 已成功暫存至雲端草稿匣！回電腦打開 IDE 即可請 AI 直接抓取分析。');
@@ -1285,11 +1309,12 @@ export default function HomePage() {
       const isImg = (file.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name);
       const reader = new FileReader();
       reader.onload = (ev) => {
+        const rawDataUrl = ev.target.result;
         if (isImg) {
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
-            const maxW = 1000;
+            const maxW = 960;
             let w = img.width;
             let h = img.height;
             if (w > maxW) {
@@ -1300,7 +1325,7 @@ export default function HomePage() {
             canvas.height = h;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, w, h);
-            const compressedUrl = canvas.toDataURL('image/jpeg', 0.8);
+            const compressedUrl = canvas.toDataURL('image/jpeg', 0.72);
             setStaffDraftMeeting((prev) => ({
               ...prev,
               attachments: [
@@ -1317,7 +1342,24 @@ export default function HomePage() {
               ]
             }));
           };
-          img.src = ev.target.result;
+          img.onerror = () => {
+            setStaffDraftMeeting((prev) => ({
+              ...prev,
+              attachments: [
+                ...(prev.attachments || []),
+                {
+                  id: `ATT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                  title: file.name,
+                  fileName: file.name,
+                  mimeType: file.type || 'image/jpeg',
+                  fileSize: file.size || 0,
+                  url: rawDataUrl,
+                  caption: `${currentUser?.name || ''} 上傳之會議照片`
+                }
+              ]
+            }));
+          };
+          img.src = rawDataUrl;
         } else {
           // PDF / Word / Excel / PPTX / CSV 等佐證附件檔案
           setStaffDraftMeeting((prev) => ({
@@ -1362,11 +1404,26 @@ export default function HomePage() {
           ? 'in_progress'
           : staffDraftMeeting.status || 'in_progress');
 
+      // 將上方「📷 上傳手寫稿」載入的圖片也一併合併存入會議附件 (attachments)，避免按「暫存紀錄資料」或「結束會議」時圖片遺失
+      const existingAttachments = Array.isArray(staffDraftMeeting.attachments) ? staffDraftMeeting.attachments : [];
+      const existingUrls = new Set(existingAttachments.map((a) => a.url));
+      const handwrittenAsAttachments = (frontendHandwrittenImages || [])
+        .filter((img) => img?.dataUrl && !existingUrls.has(img.dataUrl))
+        .map((img, idx) => ({
+          id: img.id || `ATT-HW-${Date.now()}-${idx}`,
+          title: `手寫稿照片 - ${img.name || idx + 1}`,
+          fileName: img.name || `handwritten_${idx + 1}.jpg`,
+          mimeType: img.mimeType || 'image/jpeg',
+          url: img.dataUrl,
+          caption: `${currentUser?.name || ''} 上傳之手寫稿照片`
+        }));
+
       const payloadMeeting = {
         ...staffDraftMeeting,
         title: staffDraftMeeting.title.trim(),
         status: nextStatus,
         rawTranscript: voiceQuickText || staffDraftMeeting.rawTranscript || '',
+        attachments: [...existingAttachments, ...handwrittenAsAttachments],
         agendaItems: (staffDraftMeeting.agendaItems || []).filter((a) => String(a).trim() !== ''),
         discussionSections:
           cleanedSections.length > 0
@@ -1384,9 +1441,14 @@ export default function HomePage() {
           meeting: payloadMeeting
         })
       });
+      if (res.status === 413) {
+        alert('本次上傳的圖片或附件總容量超過伺服器上限 (4.5MB)，請分批上傳或減少照片張數後再儲存！');
+        return;
+      }
       const data = await res.json();
       if (res.ok && data.success) {
         setMeetings(data.meetings || []);
+        setFrontendHandwrittenImages([]);
         if (data.savedMeeting) {
           if (modalMode === 'initiate') {
             // STEP 1 發起完成後返回首頁列表，讓與會同仁可點選進去簽到，記錄人點選進去執行會議紀錄！
