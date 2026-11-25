@@ -2214,7 +2214,6 @@ export default function HomePage() {
           </div>
           <div style={{ fontSize: '0.86rem', color: '#475569', marginTop: '0.3rem' }}>
             目前登入：<strong>{currentUser.name}</strong>（{currentUser.title}・代號 <code>{currentUser.code}</code>）
-            {' ｜ '}組別：{(currentUser.groups || []).join('、')}
           </div>
         </div>
 
@@ -2297,11 +2296,6 @@ export default function HomePage() {
               <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a', marginTop: '0.4rem' }}>
                 ✍️ 首頁・待我簽閱專區（{homePendingMeetings.length} 筆）
               </div>
-              <div style={{ fontSize: '0.82rem', color: '#475569', marginTop: '0.25rem' }}>
-                {homePendingMeetings.length > 0
-                  ? `您尚有 ${homePendingMeetings.length} 場會議待簽閱，點選卡片即可進入閱讀與簽核`
-                  : '🎉 目前所有會議皆已簽閱完成！首頁無待辦簽核'}
-              </div>
             </div>
             <BellRing size={34} color={homePendingMeetings.length > 0 ? '#dc2626' : '#059669'} />
           </div>
@@ -2341,9 +2335,6 @@ export default function HomePage() {
               <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#3b0764', marginTop: '0.4rem' }}>
                 📚 歷史紀錄專區（共 {historyMeetingsAll.length} 筆）
               </div>
-              <div style={{ fontSize: '0.82rem', color: '#475569', marginTop: '0.25rem' }}>
-                支援依「會議種類」、「年度(113~115年)」與「會議內容關鍵字」搜尋所有已簽核與歷年紀錄
-              </div>
             </div>
             <BookOpen size={34} color="#7c3aed" />
           </div>
@@ -2354,7 +2345,7 @@ export default function HomePage() {
       {activeZone === 'home' && myAssignedTasks.filter((t) => t.status !== '已完成').length > 0 && (
         <div className="card no-print" style={{ marginBottom: '1rem', background: '#faf5ff', borderColor: '#e9d5ff' }}>
           <div style={{ fontWeight: 700, color: '#5b21b6', marginBottom: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <ListChecks size={18} /> 📌 指派給您（{currentUser.name}）進行中的會議待辦事項：
+            <ListChecks size={18} /> 📌（{currentUser.name}）進行中的會議待辦事項：
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {myAssignedTasks
@@ -2432,7 +2423,7 @@ export default function HomePage() {
               </>
             ) : (
               <>
-                <BellRing size={20} /> ✍️ 首頁・待我簽閱會議清單（完成簽核後自動移入歷史紀錄專區）
+                <BellRing size={20} /> ✍️ 首頁・待我簽閱會議清單
               </>
             )}
           </div>
@@ -2580,7 +2571,7 @@ export default function HomePage() {
 
         {/* 常用歷史關鍵字快速點選標籤 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
-          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b' }}>🔥 常用歷史關鍵字快速查找：</span>
+          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b' }}>🔥 歷史關鍵字快速查找：</span>
           {['EPA', 'ACR假體', '換管球', 'GE高階CT', '乳房攝影', '輻射防護', '實習生', '品保', '當責 Q10'].map((kw) => {
             const activeKw = searchQuery.trim().toLowerCase() === kw.toLowerCase();
             return (
