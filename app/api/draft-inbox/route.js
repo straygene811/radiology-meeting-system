@@ -41,6 +41,28 @@ export async function GET(request) {
     const rawItems = await db.read('draft_inbox.json');
     const items = Array.isArray(rawItems) ? rawItems : [];
 
+    // 下載單筆草稿之轉譯文字檔 (.txt)
+    const downloadTxtId = searchParams.get('downloadTxt');
+    if (downloadTxtId) {
+      const found = items.find((it) => it.id === downloadTxtId);
+      if (!found) {
+        return NextResponse.json({ error: '找不到指定草稿' }, { status: 404 });
+      }
+      const txtContent = String(found.returnedTranscript || found.transcript || '').trim();
+      const rawTitle = String(found.transcriptTitle || `${found.meetingTitle || '會議轉譯文字檔'}.txt`).replace(
+        /[\\/:*?"<>|]/g,
+        '_'
+      );
+      const fileName = rawTitle.endsWith('.txt') ? rawTitle : `${rawTitle}.txt`;
+      return new NextResponse(txtContent || '（尚無轉譯文字內容）', {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
+        }
+      });
+    }
+
     // 單筆查詢音檔資訊
     if (audioId) {
       const found = items.find((it) => it.id === audioId);
@@ -101,6 +123,7 @@ export async function POST(request) {
     // STEP 1（分段上傳模式）：初始化草稿主檔
     if (action === 'init_draft') {
       const {
+        meetingId = '',
         category = 'dept',
         meetingTitle = '',
         date = new Date().toISOString().slice(0, 10),
@@ -131,12 +154,17 @@ export async function POST(request) {
       const now = new Date();
       const newItem = {
         id: `INBOX-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${String(now.getTime()).slice(-5)}`,
+        meetingId: String(meetingId || '').trim(),
         createdAt: now.toISOString(),
         createdBy: String(createdBy || '科內紀錄人').trim(),
         category,
         meetingTitle: String(meetingTitle || '').trim() || '未命名會議草稿（待 IDE 整理）',
         date,
         transcript: cleanTranscript,
+        returnedTranscript: '',
+        transcriptTitle: '',
+        transcribedAt: null,
+        transcribedBy: '',
         handwrittenImages: cleanImages,
         hasAudio: Boolean(hasAudio && audioChunkCount > 0),
         audioChunkCount: Number(audioChunkCount) || 0,
@@ -317,6 +345,93 @@ export async function POST(request) {
         success: true,
         items,
         message: '🗑️ 已刪除該筆雲端暫存草稿'
+      });
+    }
+
+    if (action === 'return_transcript') {
+      const {
+        id = '',
+        meetingId = '',
+        meetingTitle = '',
+        category = 'dept',
+        date = new Date().toISOString().slice(0, 10),
+        returnedTranscript = '',
+        transcriptTitle = '',
+        transcribedBy = '管理者 IDE 轉譯'
+      } = body;
+
+      const cleanText = String(returnedTranscript || '').trim();
+      if (!cleanText) {
+        return NextResponse.json({ error: '回傳的轉譯文字內容不可為空' }, { status: 400 });
+      }
+
+      const now = new Date();
+      const idx = id ? items.findIndex((item) => item.id === id) : -1;
+
+      if (idx >= 0) {
+        const existing = items[idx];
+        const updated = {
+          ...existing,
+          meetingId: String(meetingId || existing.meetingId || '').trim(),
+          meetingTitle: String(meetingTitle || existing.meetingTitle || '會議轉譯文字檔').trim(),
+          returnedTranscript: cleanText,
+          transcriptTitle:
+            String(transcriptTitle || '').trim() ||
+            `${existing.date || date}_${existing.meetingTitle || '會議轉譯文字檔'}.txt`,
+          transcribedAt: now.toISOString(),
+          transcribedBy: String(transcribedBy || '管理者 IDE 轉譯').trim(),
+          status: 'transcribed'
+        };
+        items[idx] = updated;
+        await db.write('draft_inbox.json', items);
+        return NextResponse.json({
+          success: true,
+          item: updated,
+          items,
+          message: `✅ 已成功回傳轉譯文字檔至草稿「${updated.id}」，人員可於 App 點選載入整理！`
+        });
+      }
+
+      // 若未指定既有編號或找不到原草稿，直接建立一筆「已完成轉譯」文字檔供 App 人員點選
+      const newId =
+        String(id || '').trim() ||
+        `TRANS-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${String(now.getTime()).slice(-5)}`;
+      const cleanTitle = String(meetingTitle || '').trim() || `會議轉譯文字檔 (${date})`;
+      const newItem = {
+        id: newId,
+        meetingId: String(meetingId || '').trim(),
+        createdAt: now.toISOString(),
+        createdBy: String(transcribedBy || '管理者 IDE 轉譯').trim(),
+        category,
+        meetingTitle: cleanTitle,
+        date,
+        transcript: '',
+        returnedTranscript: cleanText,
+        transcriptTitle: String(transcriptTitle || '').trim() || `${date}_${cleanTitle}.txt`,
+        transcribedAt: now.toISOString(),
+        transcribedBy: String(transcribedBy || '管理者 IDE 轉譯').trim(),
+        handwrittenImages: [],
+        hasAudio: false,
+        audioChunkCount: 0,
+        audioByteSize: 0,
+        audioMimeType: null,
+        audioFileName: null,
+        audioBase64: null,
+        audioUploadComplete: true,
+        status: 'transcribed'
+      };
+      const nextList = [newItem, ...items];
+      const pruned = nextList.slice(15);
+      items = nextList.slice(0, 15);
+      await db.write('draft_inbox.json', items);
+      if (pruned.length > 0) {
+        await Promise.allSettled(pruned.map((old) => cleanupDraftAudioChunks(old)));
+      }
+      return NextResponse.json({
+        success: true,
+        item: newItem,
+        items,
+        message: `✅ 已建立並回傳轉譯文字檔「${newItem.id}」，人員可於 App 點選載入整理！`
       });
     }
 

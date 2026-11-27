@@ -177,6 +177,9 @@ export default function HomePage() {
   const [frontendHandwrittenImages, setFrontendHandwrittenImages] = useState([]);
   const [savingFrontendDraftInbox, setSavingFrontendDraftInbox] = useState(false);
   const [frontendDraftProgress, setFrontendDraftProgress] = useState('');
+  const [frontendCloudDrafts, setFrontendCloudDrafts] = useState([]);
+  const [loadingFrontendCloudDrafts, setLoadingFrontendCloudDrafts] = useState(false);
+  const [showCloudTranscriptPicker, setShowCloudTranscriptPicker] = useState(false);
   const speechRecRef = useRef(null);
   const wantVoiceListeningRef = useRef(false);
   const voiceTimerRef = useRef(null);
@@ -687,7 +690,10 @@ export default function HomePage() {
       );
       setStaffDraftMeeting(copy);
       setVoiceQuickText(existingMeeting.rawTranscript || '');
+      latestVoiceTextRef.current = existingMeeting.rawTranscript || '';
       setModalMode(targetMode || 'record');
+      setShowCloudTranscriptPicker(false);
+      fetchFrontendCloudDrafts();
     } else {
       setStaffDraftMeeting({
         id: '',
@@ -1222,6 +1228,56 @@ export default function HomePage() {
     }
   };
 
+  const fetchFrontendCloudDrafts = async () => {
+    setLoadingFrontendCloudDrafts(true);
+    try {
+      const res = await fetch('/api/draft-inbox', { cache: 'no-store' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFrontendCloudDrafts(Array.isArray(data.items) ? data.items : []);
+      }
+    } catch {} finally {
+      setLoadingFrontendCloudDrafts(false);
+    }
+  };
+
+  const handleApplyCloudTranscript = (item) => {
+    if (!item) return;
+    const text = String(item.returnedTranscript || item.transcript || '').trim();
+    if (!text) {
+      alert('此筆草稿目前尚無已轉譯文字內容，請待轉譯完成回傳後再點選！');
+      return;
+    }
+    let nextText = text;
+    if (voiceQuickText.trim() && voiceQuickText.trim() !== text) {
+      const shouldReplace = window.confirm(
+        '下方文字區已有內容。按「確定」以這份轉譯文字檔取代，按「取消」則附加於原文字後方。'
+      );
+      nextText = shouldReplace ? text : `${voiceQuickText.trim()}\n\n${text}`;
+    }
+    setVoiceQuickText(nextText);
+    latestVoiceTextRef.current = nextText;
+
+    if (
+      Array.isArray(item.handwrittenImages) &&
+      item.handwrittenImages.length > 0 &&
+      frontendHandwrittenImages.length === 0
+    ) {
+      setFrontendHandwrittenImages(
+        item.handwrittenImages.map((img, i) => ({
+          id: img.id || `HW-CLOUD-${i}`,
+          name: img.name || `handwritten_${i + 1}.jpg`,
+          mimeType: img.mimeType || 'image/jpeg',
+          base64: String(img.dataUrl || '').split(',')[1] || '',
+          dataUrl: img.dataUrl
+        }))
+      );
+    }
+
+    setShowCloudTranscriptPicker(false);
+    showToast(`📥 已載入「${item.transcriptTitle || item.meetingTitle}」轉譯文字檔，可直接整理或點「轉成正式紀錄」！`);
+  };
+
   const handleSaveFrontendDraftInbox = async () => {
     if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0 && !frontendAudioBase64) {
       alert('請先使用語音轉譯、錄製語音檔、輸入速記內容或上傳手寫稿照片後再暫存至雲端！');
@@ -1232,6 +1288,7 @@ export default function HomePage() {
     try {
       const data = await uploadDraftToCloudInbox(
         {
+          meetingId: staffDraftMeeting?.id || '',
           category: staffDraftMeeting?.category || 'dept',
           meetingTitle: staffDraftMeeting?.title || '',
           date: staffDraftMeeting?.date || new Date().toISOString().slice(0, 10),
@@ -1249,6 +1306,9 @@ export default function HomePage() {
         },
         (msg) => setFrontendDraftProgress(msg)
       );
+      if (Array.isArray(data.items)) {
+        setFrontendCloudDrafts(data.items);
+      }
       showToast(data.message || '☁️ 已成功分段暫存至雲端草稿匣！回電腦打開 IDE 即可抓取拼回分析。');
     } catch (err) {
       alert(`暫存至雲端發生錯誤：${err?.message || '網路異常，建議先點「⬇️ 下載本機備份」保存錄音檔！'}`);
@@ -4329,8 +4389,175 @@ export default function HomePage() {
                   >
                     ☁️ {savingFrontendDraftInbox ? (frontendDraftProgress || '暫存中...') : '暫存至雲端'}
                   </button>
+                  {(() => {
+                    const readyCount = frontendCloudDrafts.filter((d) => Boolean(d.returnedTranscript)).length;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextOpen = !showCloudTranscriptPicker;
+                          setShowCloudTranscriptPicker(nextOpen);
+                          if (nextOpen) fetchFrontendCloudDrafts();
+                        }}
+                        className="btn"
+                        style={{
+                          padding: '0.38rem 0.85rem',
+                          fontSize: '0.82rem',
+                          background: readyCount > 0 ? '#059669' : '#ffffff',
+                          color: readyCount > 0 ? '#ffffff' : '#0f766e',
+                          border: readyCount > 0 ? 'none' : '1px solid #5eead4'
+                        }}
+                      >
+                        📥 載入轉譯文字檔{readyCount > 0 ? ` (${readyCount})` : ''}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
+
+              {/* 雲端已回傳轉譯文字檔選單（人員直接點選帶入整理） */}
+              {showCloudTranscriptPicker && (
+                <div
+                  style={{
+                    marginBottom: '0.65rem',
+                    padding: '0.75rem 0.9rem',
+                    background: '#f0fdf4',
+                    border: '1.5px solid #86efac',
+                    borderRadius: '10px'
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '0.45rem',
+                      marginBottom: '0.55rem'
+                    }}
+                  >
+                    <strong style={{ fontSize: '0.86rem', color: '#065f46' }}>
+                      📥 雲端回傳之轉譯文字檔（點選「帶入整理」即可載入下方文字區）
+                    </strong>
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      <button
+                        type="button"
+                        onClick={fetchFrontendCloudDrafts}
+                        disabled={loadingFrontendCloudDrafts}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.76rem' }}
+                      >
+                        🔄 {loadingFrontendCloudDrafts ? '更新中...' : '重新整理'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCloudTranscriptPicker(false)}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.2rem 0.55rem', fontSize: '0.76rem' }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const currentMtgId = staffDraftMeeting?.id || '';
+                    const selectableDrafts = [...frontendCloudDrafts]
+                      .filter((d) => Boolean((d.returnedTranscript || d.transcript || '').trim()))
+                      .sort((a, b) => {
+                        const aMatch = currentMtgId && a.meetingId === currentMtgId ? 1 : 0;
+                        const bMatch = currentMtgId && b.meetingId === currentMtgId ? 1 : 0;
+                        if (bMatch !== aMatch) return bMatch - aMatch;
+                        const aRet = a.returnedTranscript ? 1 : 0;
+                        const bRet = b.returnedTranscript ? 1 : 0;
+                        if (bRet !== aRet) return bRet - aRet;
+                        return new Date(b.transcribedAt || b.createdAt || 0) - new Date(a.transcribedAt || a.createdAt || 0);
+                      });
+
+                    if (selectableDrafts.length === 0) {
+                      return (
+                        <div style={{ fontSize: '0.82rem', color: '#475569', padding: '0.3rem 0' }}>
+                          目前尚無已回傳的轉譯文字檔。完成錄音或上傳手寫稿後點「☁️ 暫存至雲端」，待轉譯回傳後點「🔄 重新整理」即可載入。
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: '240px', overflowY: 'auto' }}>
+                        {selectableDrafts.map((item) => {
+                          const isReturned = Boolean(item.returnedTranscript);
+                          const isThisMeeting = Boolean(currentMtgId && item.meetingId === currentMtgId);
+                          const preview = String(item.returnedTranscript || item.transcript || '').replace(/\s+/g, ' ').slice(0, 65);
+                          return (
+                            <div
+                              key={item.id}
+                              style={{
+                                background: '#ffffff',
+                                border: isReturned ? '1.5px solid #34d399' : '1px solid #cbd5e1',
+                                borderRadius: '8px',
+                                padding: '0.55rem 0.75rem',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                flexWrap: 'wrap',
+                                gap: '0.5rem'
+                              }}
+                            >
+                              <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                  {isThisMeeting && (
+                                    <span className="badge" style={{ background: '#dbeafe', color: '#1d4ed8', fontSize: '0.72rem' }}>
+                                      📌 本場會議
+                                    </span>
+                                  )}
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      background: isReturned ? '#dcfce7' : '#f1f5f9',
+                                      color: isReturned ? '#15803d' : '#475569',
+                                      fontSize: '0.72rem'
+                                    }}
+                                  >
+                                    {isReturned ? '✅ 已轉譯回傳' : '☁️ 暫存文字'}
+                                  </span>
+                                  <strong style={{ fontSize: '0.86rem', color: '#0f172a' }}>
+                                    {item.transcriptTitle || item.meetingTitle}
+                                  </strong>
+                                  <span style={{ fontSize: '0.74rem', color: '#64748b' }}>
+                                    （{item.date || ''}・{item.createdBy}）
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: '0.78rem', color: '#475569', marginTop: '0.2rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {preview}
+                                  {preview.length >= 65 ? '...' : ''}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleApplyCloudTranscript(item)}
+                                  className="btn btn-success"
+                                  style={{ padding: '0.3rem 0.75rem', fontSize: '0.78rem' }}
+                                >
+                                  📥 帶入整理
+                                </button>
+                                <a
+                                  href={`/api/draft-inbox?downloadTxt=${encodeURIComponent(item.id)}`}
+                                  download
+                                  className="btn btn-secondary"
+                                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.76rem', textDecoration: 'none' }}
+                                >
+                                  ⬇️ .txt
+                                </a>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
 
               {/* 恆常顯示之「語音功能運作狀態指示列」：清楚標示目前是否正在收音或待命 */}
               <div

@@ -1126,8 +1126,9 @@ export default function AdminDashboardPage() {
     if (!item) return;
     setVoiceCategory(item.category || 'dept');
     setVoiceMeetingTitle(item.meetingTitle === '未命名會議草稿（待 IDE 整理）' ? '' : item.meetingTitle || '');
-    setRawTranscript(item.transcript || '');
-    latestRawTranscriptRef.current = item.transcript || '';
+    const bestTranscript = item.returnedTranscript || item.transcript || '';
+    setRawTranscript(bestTranscript);
+    latestRawTranscriptRef.current = bestTranscript;
     if (Array.isArray(item.handwrittenImages) && item.handwrittenImages.length > 0) {
       setUploadedHandwrittenImages(
         item.handwrittenImages.map((img, i) => ({
@@ -4262,6 +4263,11 @@ export default function AdminDashboardPage() {
                         <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '0.74rem' }}>
                           {item.id}
                         </span>
+                        {item.returnedTranscript && (
+                          <span className="badge" style={{ background: '#dcfce7', color: '#15803d', fontSize: '0.74rem' }}>
+                            ✅ 已回傳轉譯文字檔
+                          </span>
+                        )}
                         <strong style={{ fontSize: '0.92rem', color: '#0f172a' }}>{item.meetingTitle}</strong>
                         <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
                           （上傳人：{item.createdBy}｜{new Date(item.createdAt).toLocaleString('zh-TW')}）
