@@ -11,10 +11,37 @@ async function fetchSource(label, url) {
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) return [];
     const data = await res.json();
-    return (data.items || []).map((item) => ({ ...item, _source: label }));
+    return (data.items || []).map((item) => ({ ...item, _source: label, _apiUrl: url }));
   } catch {
     return [];
   }
+}
+
+async function fetchChunkedAudio(item) {
+  if (item.audioBase64) return item.audioBase64;
+  const count = Number(item.audioChunkCount) || 0;
+  if (count <= 0 || !item._apiUrl) return null;
+
+  const parts = [];
+  for (let i = 0; i < count; i++) {
+    process.stdout.write(`   ⏳ 下載語音分段 ${i + 1}/${count}...\r`);
+    const res = await fetch(
+      `${item._apiUrl}?audioId=${encodeURIComponent(item.id)}&chunk=${i}`,
+      { cache: 'no-store' }
+    );
+    if (!res.ok) {
+      console.error(`\n   ⚠️ 語音分段 ${i + 1} 下載失敗 (HTTP ${res.status})`);
+      return null;
+    }
+    const data = await res.json();
+    if (!data.success || !data.chunkData) {
+      console.error(`\n   ⚠️ 語音分段 ${i + 1} 無資料`);
+      return null;
+    }
+    parts.push(data.chunkData);
+  }
+  if (count > 0) process.stdout.write('                                     \r');
+  return parts.join('');
 }
 
 function sanitizeFileName(str) {
@@ -45,7 +72,7 @@ async function main() {
     return;
   }
 
-  console.log(`📥 共抓取到 ${merged.length} 筆暫存草稿，已存入「${outDir}」：`);
+  console.log(`📥 共抓取到 ${merged.length} 筆暫存草稿，正在存入「${outDir}」：`);
 
   for (const item of merged) {
     const dateStr = sanitizeFileName(item.date || (item.createdAt || '').slice(0, 10) || '未定日期');
@@ -87,13 +114,17 @@ async function main() {
       }
     }
 
-    // 3. 儲存錄音檔（中文檔名）
+    // 3. 儲存錄音檔（支援自動從分段重新拼回完整大錄音檔，中文檔名）
     let savedAudio = null;
-    if (item.audioBase64) {
-      const ext = sanitizeFileName((item.audioFileName || '').split('.').pop() || 'webm');
-      const audioPath = path.join(itemDir, `語音錄音檔.${ext}`);
-      fs.writeFileSync(audioPath, Buffer.from(item.audioBase64, 'base64'));
-      savedAudio = audioPath;
+    if (item.hasAudio || item.audioBase64 || item.audioChunkCount > 0) {
+      const fullAudioB64 = await fetchChunkedAudio(item);
+      if (fullAudioB64) {
+        const ext = sanitizeFileName((item.audioFileName || '').split('.').pop() || 'm4a');
+        const audioPath = path.join(itemDir, `語音錄音檔.${ext}`);
+        const buf = Buffer.from(fullAudioB64, 'base64');
+        fs.writeFileSync(audioPath, buf);
+        savedAudio = `${audioPath} (${(buf.length / (1024 * 1024)).toFixed(2)} MB)`;
+      }
     }
 
     console.log(`\n✅ [${folderName}] (${item._source}) — ${item.meetingTitle}`);

@@ -35,6 +35,7 @@ import {
   Upload
 } from 'lucide-react';
 import { generateMeetingDocxBlob } from '@/lib/exportDocx';
+import { uploadDraftToCloudInbox } from '@/lib/chunkedDraftUpload';
 
 // 將搜尋關鍵字轉為容許中英文之間有無空白之正規表達式（例如輸入「ACR假體」可同時命中「ACR 假體」與「ACR假體」）
 function buildFlexibleKeywordRegex(rawKeyword, flags = 'gi') {
@@ -169,11 +170,13 @@ export default function HomePage() {
   const [frontendAudioMime, setFrontendAudioMime] = useState('audio/mp4');
   const [frontendAudioName, setFrontendAudioName] = useState('');
   const [frontendAudioUrl, setFrontendAudioUrl] = useState(null);
+  const [frontendAudioSizeBytes, setFrontendAudioSizeBytes] = useState(0);
   const [isFrontendAudioRecording, setIsFrontendAudioRecording] = useState(false);
   const [frontendAudioSeconds, setFrontendAudioSeconds] = useState(0);
   const [aiStructuringLoading, setAiStructuringLoading] = useState(false);
   const [frontendHandwrittenImages, setFrontendHandwrittenImages] = useState([]);
   const [savingFrontendDraftInbox, setSavingFrontendDraftInbox] = useState(false);
+  const [frontendDraftProgress, setFrontendDraftProgress] = useState('');
   const speechRecRef = useRef(null);
   const wantVoiceListeningRef = useRef(false);
   const voiceTimerRef = useRef(null);
@@ -992,18 +995,25 @@ export default function HomePage() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const preferredMime =
-        typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/mp4')
-          ? 'audio/mp4'
-          : typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus')
+        typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus')
           ? 'audio/webm;codecs=opus'
+          : typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/mp4')
+          ? 'audio/mp4'
+          : typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/webm')
+          ? 'audio/webm'
           : '';
+      // 人聲會議專用壓縮 (16kbps)：1分鐘僅約 120KB，30分鐘約 3.6MB，長會議也能輕鬆分段上傳！
       let mr;
       try {
         mr = preferredMime
-          ? new MediaRecorder(stream, { mimeType: preferredMime, audioBitsPerSecond: 32000 })
-          : new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+          ? new MediaRecorder(stream, { mimeType: preferredMime, audioBitsPerSecond: 16000 })
+          : new MediaRecorder(stream, { audioBitsPerSecond: 16000 });
       } catch {
-        mr = new MediaRecorder(stream);
+        try {
+          mr = preferredMime ? new MediaRecorder(stream, { mimeType: preferredMime }) : new MediaRecorder(stream);
+        } catch {
+          mr = new MediaRecorder(stream);
+        }
       }
 
       const chunks = [];
@@ -1011,24 +1021,34 @@ export default function HomePage() {
         if (e.data && e.data.size > 0) chunks.push(e.data);
       };
       mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
         const actualMime = mr.mimeType || preferredMime || 'audio/mp4';
         const ext = actualMime.includes('mp4') || actualMime.includes('aac') ? 'm4a' : 'webm';
         const blob = new Blob(chunks, { type: actualMime });
+        if (!blob.size) {
+          alert('未偵測到錄音資料，請確認麥克風權限已開啟並稍微說話後再停止錄音！');
+          return;
+        }
         const url = URL.createObjectURL(blob);
         setFrontendAudioUrl(url);
         setFrontendAudioMime(actualMime);
-        setFrontendAudioName(`手機會議錄音_${new Date().toISOString().slice(0, 10)}.${ext}`);
+        setFrontendAudioSizeBytes(blob.size);
+        setFrontendAudioName(`會議錄音_${new Date().toISOString().slice(0, 10)}.${ext}`);
         const reader = new FileReader();
         reader.onload = (ev) => {
           const b64 = String(ev.target.result || '').split(',')[1] || '';
           setFrontendAudioBase64(b64);
-          showToast('🎵 手機語音錄製完成！可點選「☁️ 暫存至雲端」回電腦用 IDE 分析，或直接轉換！');
+          const mb = (blob.size / (1024 * 1024)).toFixed(2);
+          showToast(`🎵 語音錄製完成（${mb} MB，支援自動分段上傳）！可按「☁️ 暫存至雲端」或「⬇️ 下載本機備份」。`);
+        };
+        reader.onerror = () => {
+          alert('讀取錄音檔失敗，請先點選「⬇️ 下載本機備份」保留音檔！');
         };
         reader.readAsDataURL(blob);
-        stream.getTracks().forEach((t) => t.stop());
       };
 
-      mr.start();
+      // 每 1 秒切片收集音訊，避免 iOS / Android 長錄音停止時遺失資料
+      mr.start(1000);
       frontendMediaRecorderRef.current = mr;
       setFrontendAudioSeconds(0);
       setIsFrontendAudioRecording(true);
@@ -1037,7 +1057,7 @@ export default function HomePage() {
       }, 1000);
     } catch (err) {
       activateMobileKeyboardDictation(
-        '📱 您的手機瀏覽器限制網頁直接存取麥克風，已自動為您切換為「🟢 手機鍵盤 🎤 語音輸入模式」：請直接按「手機鍵盤右下角的 🎤 麥克風」講話，或點選「📂 選取手機錄音檔」！'
+        '📱 您的瀏覽器限制網頁直接存取麥克風，已自動切換為「🟢 手機語音轉譯」：請直接按「手機鍵盤右下角的 🎤 麥克風」講話！'
       );
     }
   };
@@ -1047,6 +1067,7 @@ export default function HomePage() {
     if (!file) return;
     setFrontendAudioName(file.name);
     setFrontendAudioMime(file.type || 'audio/mp4');
+    setFrontendAudioSizeBytes(file.size || 0);
     const url = URL.createObjectURL(file);
     setFrontendAudioUrl(url);
     const reader = new FileReader();
@@ -1203,16 +1224,14 @@ export default function HomePage() {
 
   const handleSaveFrontendDraftInbox = async () => {
     if (!voiceQuickText.trim() && frontendHandwrittenImages.length === 0 && !frontendAudioBase64) {
-      alert('請先使用語音輸入、錄製/上傳手機錄音檔、輸入速記內容或上傳手寫稿照片後再暫存至雲端！');
+      alert('請先使用語音轉譯、錄製語音檔、輸入速記內容或上傳手寫稿照片後再暫存至雲端！');
       return;
     }
     setSavingFrontendDraftInbox(true);
+    setFrontendDraftProgress('準備上傳...');
     try {
-      const res = await fetch('/api/draft-inbox', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'save_draft',
+      const data = await uploadDraftToCloudInbox(
+        {
           category: staffDraftMeeting?.category || 'dept',
           meetingTitle: staffDraftMeeting?.title || '',
           date: staffDraftMeeting?.date || new Date().toISOString().slice(0, 10),
@@ -1227,22 +1246,15 @@ export default function HomePage() {
           audioBase64: frontendAudioBase64,
           audioMimeType: frontendAudioMime,
           audioFileName: frontendAudioName
-        })
-      });
-      if (res.status === 413) {
-        alert('上傳的圖片或錄音檔總容量超過單次上限 (4.5MB)，請減少單次照片張數或分批上傳！');
-        return;
-      }
-      const data = await res.json();
-      if (res.ok && data.success) {
-        showToast(data.message || '☁️ 已成功暫存至雲端草稿匣！回電腦打開 IDE 即可請 AI 直接抓取分析。');
-      } else {
-        alert(data.error || '暫存失敗');
-      }
+        },
+        (msg) => setFrontendDraftProgress(msg)
+      );
+      showToast(data.message || '☁️ 已成功分段暫存至雲端草稿匣！回電腦打開 IDE 即可抓取拼回分析。');
     } catch (err) {
-      alert('暫存至雲端發生錯誤');
+      alert(`暫存至雲端發生錯誤：${err?.message || '網路異常，建議先點「⬇️ 下載本機備份」保存錄音檔！'}`);
     } finally {
       setSavingFrontendDraftInbox(false);
+      setFrontendDraftProgress('');
     }
   };
 
@@ -4503,7 +4515,7 @@ export default function HomePage() {
                       color: '#ffffff'
                     }}
                   >
-                    ☁️ {savingFrontendDraftInbox ? '暫存中...' : '暫存至雲端'}
+                    ☁️ {savingFrontendDraftInbox ? (frontendDraftProgress || '暫存中...') : '暫存至雲端'}
                   </button>
                 </div>
               </div>
@@ -4631,15 +4643,38 @@ export default function HomePage() {
                     color: '#0369a1'
                   }}
                 >
-                  <span>🎵 已載入語音檔：<strong>{frontendAudioName}</strong></span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>
+                    🎵 已載入語音檔：<strong>{frontendAudioName}</strong>
+                    {frontendAudioSizeBytes > 0 && (
+                      <span style={{ marginLeft: '0.35rem', color: '#0284c7', fontWeight: 700 }}>
+                        ({(frontendAudioSizeBytes / (1024 * 1024)).toFixed(2)} MB・支援長錄音分段上傳)
+                      </span>
+                    )}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                     <audio src={frontendAudioUrl} controls style={{ height: '30px', maxWidth: '210px' }} />
+                    <a
+                      href={frontendAudioUrl}
+                      download={frontendAudioName || `會議錄音_${new Date().toISOString().slice(0, 10)}.webm`}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '0.2rem 0.55rem',
+                        fontSize: '0.74rem',
+                        textDecoration: 'none',
+                        background: '#ffffff',
+                        color: '#0369a1',
+                        borderColor: '#7dd3fc'
+                      }}
+                    >
+                      ⬇️ 下載本機備份
+                    </a>
                     <button
                       type="button"
                       onClick={() => {
                         setFrontendAudioUrl(null);
                         setFrontendAudioBase64(null);
                         setFrontendAudioName('');
+                        setFrontendAudioSizeBytes(0);
                       }}
                       className="btn btn-danger"
                       style={{ padding: '0.18rem 0.5rem', fontSize: '0.74rem' }}

@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 import { generateMeetingDocxBlob } from '@/lib/exportDocx';
 import { GOOGLE_APPS_SCRIPT_CODE } from '@/lib/googleAppsScriptTemplate';
+import { uploadDraftToCloudInbox, downloadChunkedAudioBase64 } from '@/lib/chunkedDraftUpload';
 
 // 將搜尋關鍵字轉為容許中英文之間有無空白之正規表達式（例如輸入「ACR假體」可同時命中「ACR 假體」與「ACR假體」）
 function buildFlexibleKeywordRegex(rawKeyword, flags = 'gi') {
@@ -176,6 +177,7 @@ export default function AdminDashboardPage() {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordedAudioUrl, setRecordedAudioUrl] = useState(null);
   const [recordedAudioBase64, setRecordedAudioBase64] = useState(null);
+  const [recordedAudioMime, setRecordedAudioMime] = useState('audio/webm');
   const [uploadedAudioFile, setUploadedAudioFile] = useState(null);
   const [uploadedAudioBase64, setUploadedAudioBase64] = useState(null);
   const [uploadedAudioMime, setUploadedAudioMime] = useState('audio/mp3');
@@ -183,6 +185,7 @@ export default function AdminDashboardPage() {
   const [attachHandwrittenToMeeting, setAttachHandwrittenToMeeting] = useState(true);
   const [draftInboxItems, setDraftInboxItems] = useState([]);
   const [savingDraftInbox, setSavingDraftInbox] = useState(false);
+  const [adminDraftProgress, setAdminDraftProgress] = useState('');
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiModeUsed, setAiModeUsed] = useState('');
@@ -947,27 +950,30 @@ export default function AdminDashboardPage() {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           let mediaRecorder;
           try {
-            mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+            mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 16000 });
           } catch {
             mediaRecorder = new MediaRecorder(stream);
           }
           const chunks = [];
           mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) chunks.push(e.data);
+            if (e.data && e.data.size > 0) chunks.push(e.data);
           };
           mediaRecorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'audio/webm' });
+            stream.getTracks().forEach((track) => track.stop());
+            const actualMime = mediaRecorder.mimeType || 'audio/webm';
+            const blob = new Blob(chunks, { type: actualMime });
+            if (!blob.size) return;
             const url = URL.createObjectURL(blob);
             setRecordedAudioUrl(url);
+            setRecordedAudioMime(actualMime);
             const reader = new FileReader();
             reader.onload = (ev) => {
               const b64 = String(ev.target.result || '').split(',')[1] || '';
               setRecordedAudioBase64(b64);
             };
             reader.readAsDataURL(blob);
-            stream.getTracks().forEach((track) => track.stop());
           };
-          mediaRecorder.start();
+          mediaRecorder.start(1000);
           mediaRecorderRef.current = mediaRecorder;
         }
       } catch {}
@@ -1067,33 +1073,37 @@ export default function AdminDashboardPage() {
     }
 
     setSavingDraftInbox(true);
+    setAdminDraftProgress('準備分段上傳...');
     try {
-      const res = await fetch('/api/draft-inbox', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'save_draft',
+      const data = await uploadDraftToCloudInbox(
+        {
           category: voiceCategory,
           meetingTitle: voiceMeetingTitle,
           createdBy: approvalApproverName || '管理員/紀錄人',
           transcript: rawTranscript,
-          handwrittenImages: uploadedHandwrittenImages,
+          handwrittenImages: uploadedHandwrittenImages.map((img) => ({
+            id: img.id,
+            name: img.name,
+            mimeType: img.mimeType,
+            dataUrl: img.dataUrl
+          })),
           audioBase64: effectiveAudioB64,
-          audioMimeType: uploadedAudioBase64 ? uploadedAudioMime : 'audio/webm',
-          audioFileName: uploadedAudioFile?.name || `會議錄音_${new Date().toISOString().slice(0, 10)}.webm`
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setDraftInboxItems(data.items || []);
-        showToast(data.message || '☁️ 已成功暫存至雲端草稿匣！回到電腦打開 IDE 即可請 AI 直接抓取分析。');
-      } else {
-        alert(data.error || '暫存失敗');
-      }
+          audioMimeType: uploadedAudioBase64 ? uploadedAudioMime : recordedAudioMime,
+          audioFileName:
+            uploadedAudioFile?.name ||
+            `會議錄音_${new Date().toISOString().slice(0, 10)}.${
+              recordedAudioMime.includes('mp4') || recordedAudioMime.includes('aac') ? 'm4a' : 'webm'
+            }`
+        },
+        (msg) => setAdminDraftProgress(msg)
+      );
+      setDraftInboxItems(data.items || []);
+      showToast(data.message || '☁️ 已成功分段暫存至雲端草稿匣！回到電腦打開 IDE 即可請 AI 直接抓取分析。');
     } catch (err) {
-      alert('暫存至雲端草稿匣發生錯誤');
+      alert(`暫存至雲端草稿匣發生錯誤：${err?.message || '網路連線異常'}`);
     } finally {
       setSavingDraftInbox(false);
+      setAdminDraftProgress('');
     }
   };
 
@@ -1112,7 +1122,7 @@ export default function AdminDashboardPage() {
     } catch {}
   };
 
-  const handleLoadDraftInboxItem = (item) => {
+  const handleLoadDraftInboxItem = async (item) => {
     if (!item) return;
     setVoiceCategory(item.category || 'dept');
     setVoiceMeetingTitle(item.meetingTitle === '未命名會議草稿（待 IDE 整理）' ? '' : item.meetingTitle || '');
@@ -1129,10 +1139,18 @@ export default function AdminDashboardPage() {
         }))
       );
     }
-    if (item.audioBase64) {
-      setUploadedAudioBase64(item.audioBase64);
-      setUploadedAudioMime(item.audioMimeType || 'audio/webm');
-      setUploadedAudioFile({ name: item.audioFileName || '雲端暫存錄音檔.webm' });
+    if (item.audioBase64 || item.hasAudio || item.audioChunkCount > 0) {
+      try {
+        showToast('⏳ 正在從雲端抓取並拼回錄音檔...');
+        const fullAudioB64 = await downloadChunkedAudioBase64(item, '/api/draft-inbox');
+        if (fullAudioB64) {
+          setUploadedAudioBase64(fullAudioB64);
+          setUploadedAudioMime(item.audioMimeType || 'audio/webm');
+          setUploadedAudioFile({ name: item.audioFileName || '雲端暫存錄音檔.webm' });
+        }
+      } catch (err) {
+        alert(`載入雲端錄音檔失敗：${err?.message || '請稍後再試'}`);
+      }
     }
     showToast(`📂 已將「${item.meetingTitle}」的手寫稿與語音載入上方工作台！`);
   };
@@ -4181,7 +4199,7 @@ export default function AdminDashboardPage() {
               }}
             >
               <Cloud size={18} />{' '}
-              {savingDraftInbox ? '正在上傳暫存至雲端...' : '☁️ 暫存語音＋手寫稿至雲端（回電腦用 IDE 抓取分析）'}
+              {savingDraftInbox ? (adminDraftProgress || '正在分段暫存至雲端...') : '☁️ 暫存語音＋手寫稿至雲端（支援長錄音分段上傳）'}
             </button>
             <button
               type="button"
@@ -4251,7 +4269,16 @@ export default function AdminDashboardPage() {
                       </div>
                       <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: '0.25rem' }}>
                         🖼️ 手寫稿照片：<strong>{(item.handwrittenImages || []).length} 張</strong> ｜ 🎵 錄音檔：
-                        <strong>{item.hasAudio ? '有附帶' : '無'}</strong> ｜ 📝 語音/速記文字：
+                        <strong>
+                          {item.hasAudio
+                            ? `有附帶${
+                                item.audioByteSize > 0
+                                  ? `（${(item.audioByteSize / (1024 * 1024)).toFixed(2)} MB）`
+                                  : ''
+                              }`
+                            : '無'}
+                        </strong>{' '}
+                        ｜ 📝 語音/速記文字：
                         <strong>{item.transcript ? `${item.transcript.slice(0, 45)}...` : '無'}</strong>
                       </div>
                     </div>
