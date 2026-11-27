@@ -2481,77 +2481,49 @@ export default function HomePage() {
                 ))}
               </div>
             )}
-            <button
-              type="button"
-              onClick={() => openStaffMeetingCreator(null, 'initiate')}
-              className="btn btn-success"
-              style={{ padding: '0.4rem 0.9rem', fontSize: '0.84rem' }}
-            >
-              <Plus size={15} /> ➕ 發起新會議
-            </button>
+            {activeZone !== 'history' && (
+              <button
+                type="button"
+                onClick={() => openStaffMeetingCreator(null, 'initiate')}
+                className="btn btn-success"
+                style={{ padding: '0.4rem 0.9rem', fontSize: '0.84rem' }}
+              >
+                <Plus size={15} /> ➕ 發起新會議
+              </button>
+            )}
           </div>
         </div>
 
-        {/* 1. 會議紀錄種類分類頁籤（含各種類筆數統計） */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '0.85rem' }}>
-          <button
-            type="button"
-            onClick={() => setCategoryFilter('ALL')}
+        {/* 1. 會議種類下拉選單 + 歷史與全庫會議紀錄內容全文搜尋框 */}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            aria-label="會議種類篩選"
             style={{
-              padding: '0.45rem 0.9rem',
-              borderRadius: '999px',
-              border: categoryFilter === 'ALL' ? 'none' : '1px solid #cbd5e1',
-              background: categoryFilter === 'ALL' ? '#0f172a' : '#ffffff',
-              color: categoryFilter === 'ALL' ? '#ffffff' : '#334155',
+              width: 'auto',
+              flex: '0 0 auto',
+              minWidth: '185px',
+              padding: '0.58rem 0.85rem',
+              fontSize: '0.88rem',
               fontWeight: 700,
-              fontSize: '0.85rem',
+              borderRadius: '8px',
+              border: categoryFilter !== 'ALL' ? '2px solid #7c3aed' : '1px solid #cbd5e1',
+              background: categoryFilter !== 'ALL' ? '#faf5ff' : '#ffffff',
+              color: '#1e293b',
               cursor: 'pointer'
             }}
           >
-            全部會議種類 ({baseZoneMeetings.length})
-          </button>
-
-          {(settings.meetingCategories || []).map((cat) => {
-            const countInCat = baseZoneMeetings.filter((m) => m.category === cat.id).length;
-            const isSelected = categoryFilter === cat.id;
-            return (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => setCategoryFilter(cat.id)}
-                style={{
-                  padding: '0.45rem 0.9rem',
-                  borderRadius: '999px',
-                  border: isSelected ? 'none' : '1px solid #cbd5e1',
-                  background: isSelected ? cat.color : '#ffffff',
-                  color: isSelected ? '#ffffff' : '#334155',
-                  fontWeight: 700,
-                  fontSize: '0.85rem',
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.35rem'
-                }}
-              >
-                <span>{cat.shortName || cat.name}</span>
-                <span
-                  style={{
-                    background: isSelected ? 'rgba(255,255,255,0.25)' : cat.badgeBg,
-                    color: isSelected ? '#ffffff' : cat.color,
-                    padding: '0.08rem 0.45rem',
-                    borderRadius: '999px',
-                    fontSize: '0.75rem'
-                  }}
-                >
-                  {countInCat}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* 2. 歷史與全庫會議紀錄內容全文搜尋框 */}
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <option value="ALL">全部會議種類 ({baseZoneMeetings.length})</option>
+            {(settings.meetingCategories || []).map((cat) => {
+              const countInCat = baseZoneMeetings.filter((m) => m.category === cat.id).length;
+              return (
+                <option key={cat.id} value={cat.id}>
+                  {cat.shortName || cat.name} ({countInCat})
+                </option>
+              );
+            })}
+          </select>
           <div style={{ position: 'relative', flex: 1, minWidth: '250px' }}>
             <input
               type="text"
@@ -2651,7 +2623,7 @@ export default function HomePage() {
                   ? `🔍 歷史與全庫會議關鍵字「${searchQuery}」搜尋結果（共找到 ${visibleMeetings.length} 份會議紀錄，點選即可開啟該份紀錄）：`
                   : activeZone === 'home'
                   ? `✍️ 待您簽閱的會議清單（共 ${visibleMeetings.length} 筆，點選列即可開啟）：`
-                  : `📚 歷史紀錄專區列表（共 ${visibleMeetings.length} 筆，點選列即可開啟會議紀錄）：`}
+                  : '📚 歷史紀錄專區列表'}
               </div>
             </div>
 
