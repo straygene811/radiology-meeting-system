@@ -3111,8 +3111,8 @@ export default function HomePage() {
                     >
                       <Edit3 size={16} />{' '}
                       {activeMeeting.status === 'returned'
-                        ? '✏️ 修改會議紀錄資料（已保留原維護內容）'
-                        : '📝 進入執行會議紀錄'}
+                        ? '✏️ 修改會議紀錄資料'
+                        : '📝 進入維護會議紀錄'}
                     </button>
                     <button
                       type="button"
@@ -3121,7 +3121,7 @@ export default function HomePage() {
                       className="btn btn-purple"
                       style={{ padding: '0.5rem 0.95rem', fontSize: '0.86rem' }}
                     >
-                      <CheckCircle2 size={16} /> 🏁 結束會議（完成登錄送技術主任確認）
+                      <CheckCircle2 size={16} /> 🏁 結束會議
                     </button>
                   </>
                 )}
@@ -3199,10 +3199,9 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* ==================== STAGE 1 & 2 (in_progress)：現場出席簽到專區 ＆ 記錄人執行會議紀錄控制台 ==================== */}
+          {/* ==================== 現場出席簽到按鈕列 ==================== */}
           {activeMeeting.status === 'in_progress' && (
-            <div className="no-print" style={{ display: 'flex', flexDirection: 'column', gap: '0.95rem', marginBottom: '1.25rem' }}>
-              {/* A. 全體與會人員：現場出席簽到區 */}
+            <div className="no-print" style={{ marginBottom: '1.15rem' }}>
               {(() => {
                 const myCheckin = activeMeeting.checkins?.[currentUser.name] || null;
                 const checkinList = Object.values(activeMeeting.checkins || {});
@@ -3210,120 +3209,60 @@ export default function HomePage() {
                   <div
                     style={{
                       background: myCheckin ? '#ecfdf5' : '#f0fdf4',
-                      border: myCheckin ? '2px solid #10b981' : '2px solid #22c55e',
-                      borderRadius: '14px',
-                      padding: '1.15rem 1.25rem'
+                      border: myCheckin ? '1.5px solid #10b981' : '1.5px solid #86efac',
+                      borderRadius: '12px',
+                      padding: '0.85rem 1.05rem'
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                      <div>
-                        <span className="badge" style={{ background: '#16a34a', color: '#ffffff', marginBottom: '0.3rem' }}>
-                          🟢 會議進行中・STEP 1 現場出席簽到
+                    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      {myCheckin ? (
+                        <span
+                          className="badge"
+                          style={{ background: '#16a34a', color: '#ffffff', padding: '0.45rem 0.85rem', fontSize: '0.86rem' }}
+                        >
+                          ✅ {currentUser.name} 已簽到（{new Date(myCheckin.checkedInAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}）
                         </span>
-                        <h3 style={{ margin: 0, fontSize: '1.12rem', color: '#065f46' }}>
-                          {myCheckin
-                            ? `✅ ${currentUser.name}，您已完成本場會議【現場出席簽到】！`
-                            : `📲 ${currentUser.name}，本場會議已發起，請先點選完成【現場出席簽到】`}
-                        </h3>
-                        {myCheckin && (
-                          <div style={{ fontSize: '0.84rem', color: '#047857', marginTop: '0.25rem' }}>
-                            {`簽到方式：${myCheckin.method} ｜ 簽到時間：${new Date(myCheckin.checkedInAt).toLocaleString('zh-TW')}`}
-                          </div>
-                        )}
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        {!myCheckin && (
-                          <button
-                            type="button"
-                            disabled={signingLoading}
-                            onClick={() => handleSignMeeting(activeMeeting.id, 'checkin', null, '現場出席簽到')}
-                            className="btn btn-success"
-                            style={{ padding: '0.6rem 1.15rem', fontSize: '0.92rem' }}
-                          >
-                            <UserCheck size={18} /> 📲 立即完成現場出席簽到
-                          </button>
-                        )}
+                      ) : (
                         <button
                           type="button"
-                          onClick={() => {
-                            setSigPadMode('checkin');
-                            setShowSigPad(true);
-                          }}
-                          className="btn"
-                          style={{ background: '#0f766e', padding: '0.6rem 1rem', fontSize: '0.88rem' }}
+                          disabled={signingLoading}
+                          onClick={() => handleSignMeeting(activeMeeting.id, 'checkin', null, '現場出席簽到')}
+                          className="btn btn-success"
+                          style={{ padding: '0.55rem 1.05rem', fontSize: '0.9rem' }}
                         >
-                          <PenTool size={16} /> {myCheckin ? '更新手寫簽到簽名' : '✍️ 手寫電子簽名簽到'}
+                          <UserCheck size={17} /> 📲 立即完成現場出席簽到
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openFrontendQrModal(activeMeeting)}
-                          className="btn btn-secondary"
-                          style={{ padding: '0.6rem 0.95rem', fontSize: '0.86rem', background: '#ffffff', color: '#15803d', borderColor: '#86efac' }}
-                        >
-                          <QrCode size={16} /> 顯示簽到 QR Code
-                        </button>
-                      </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSigPadMode('checkin');
+                          setShowSigPad(true);
+                        }}
+                        className="btn"
+                        style={{ background: '#0f766e', padding: '0.55rem 0.95rem', fontSize: '0.86rem' }}
+                      >
+                        <PenTool size={15} /> {myCheckin ? '更新手寫簽到簽名' : '✍️ 手寫電子簽名簽到'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openFrontendQrModal(activeMeeting)}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.55rem 0.9rem', fontSize: '0.85rem', background: '#ffffff', color: '#15803d', borderColor: '#86efac' }}
+                      >
+                        <QrCode size={15} /> 顯示簽到 QR Code
+                      </button>
                     </div>
 
                     {checkinList.length > 0 && (
-                      <div style={{ marginTop: '0.8rem', paddingTop: '0.7rem', borderTop: '1px dashed #86efac', fontSize: '0.83rem', color: '#065f46' }}>
-                        <strong>🙌 目前已完成現場簽到同仁（{checkinList.length} 人）：</strong>
+                      <div style={{ marginTop: '0.65rem', paddingTop: '0.55rem', borderTop: '1px dashed #86efac', fontSize: '0.82rem', color: '#065f46' }}>
+                        <strong>🙌 已簽到（{checkinList.length} 人）：</strong>
                         {checkinList.map((c) => c.name).join('、')}
                       </div>
                     )}
                   </div>
                 );
               })()}
-
-              {/* B. 記錄人 / 發起人 / 主席 / 主任專屬：點選進入執行會議紀錄 & 完成會議後結束會議 */}
-              {isRecorderOrInitiator(activeMeeting, currentUser) && (
-                <div
-                  style={{
-                    background: '#eff6ff',
-                    border: '2px solid #2563eb',
-                    borderRadius: '14px',
-                    padding: '1.15rem 1.25rem',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '0.85rem'
-                  }}
-                >
-                  <div style={{ flex: '1 1 320px' }}>
-                    <span className="badge" style={{ background: '#2563eb', color: '#ffffff', marginBottom: '0.3rem' }}>
-                      📝 STEP 2・執行會議紀錄與結束資料登錄（記錄人：{activeMeeting.recorder}）
-                    </span>
-                    <h3 style={{ margin: 0, fontSize: '1.12rem', color: '#1e3a8a' }}>
-                      點選「📝 進入執行會議紀錄」開始語音轉譯／登錄內容；完成會議後請按「🏁 結束會議」
-                    </h3>
-                    <div style={{ fontSize: '0.84rem', color: '#334155', marginTop: '0.25rem' }}>
-                      會議進行期間可隨時暫存紀錄資料；當會議結束、按下「<strong>🏁 結束會議</strong>」後即結束資料登錄，並送交<strong>技術主任確認無誤後按「公布」</strong>。
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      onClick={() => openStaffMeetingCreator(activeMeeting, 'record')}
-                      className="btn"
-                      style={{ background: '#2563eb', padding: '0.68rem 1.25rem', fontSize: '0.95rem' }}
-                    >
-                      <Edit3 size={18} /> 📝 點此進入執行會議紀錄（語音轉譯／手寫稿／議程決議）
-                    </button>
-                    <button
-                      type="button"
-                      disabled={savingStaffMeeting}
-                      onClick={() => handleFinishMeetingRecord(activeMeeting)}
-                      className="btn btn-purple"
-                      style={{ padding: '0.68rem 1.25rem', fontSize: '0.95rem' }}
-                    >
-                      <CheckCircle2 size={18} /> 🏁 結束會議（完成資料登錄，送技術主任確認）
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
